@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多Bot群聊</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif;
+    background:#1a1a2e;color:#e0e0e0;height:100vh;overflow:hidden;
+    display:flex;flex-direction:column
+  }
+  
+  /* ── 顶部栏 ── */
+  .topbar{
+    background:#16213e;padding:12px 20px;display:flex;
+    align-items:center;justify-content:space-between;
+    border-bottom:1px solid #0f3460;flex-shrink:0
+  }
+  .topbar h1{font-size:18px;font-weight:600;color:#e94560}
+  .topbar .status{font-size:12px;color:#888}
+  .topbar .status .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#4ade80;vertical-align:middle}
+  .sidebar-toggle{display:none;background:none;border:none;color:#e0e0e0;font-size:24px;cursor:pointer;padding:0 8px}
+  
+  /* ── 主布局 ── */
+  .layout{display:flex;flex:1;overflow:hidden}
+  
+  /* ── 左侧栏 ── */
+  .sidebar{
+    width:260px;background:#16213e;border-right:1px solid #0f3460;
+    display:flex;flex-direction:column;flex-shrink:0;overflow:hidden
+  }
+  .sidebar-section{padding:16px;border-bottom:1px solid #0f3460}
+  .sidebar-section h3{font-size:13px;color:#888;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px}
+  .member-item{
+    display:flex;align-items:center;padding:8px 12px;margin-bottom:4px;
+    border-radius:8px;background:rgba(255,255,255,.04);font-size:14px
+  }
+  .member-item .avatar{font-size:20px;margin-right:10px}
+  .member-item .name{flex:1}
+  .member-item .tag{font-size:11px;padding:2px 8px;border-radius:10px;background:#e94560;color:#fff}
+  .member-item .tag.bot{background:#0f3460;color:#e94560;border:1px solid #e94560}
+  
+  .bot-list{margin-top:8px}
+  .bot-item{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:8px 12px;margin-bottom:4px;border-radius:8px;
+    background:rgba(255,255,255,.04);font-size:14px
+  }
+  .bot-item .info{display:flex;align-items:center;gap:8px}
+  .bot-btn{
+    padding:4px 12px;border:none;border-radius:6px;cursor:pointer;
+    font-size:12px;font-weight:600;transition:all .2s
+  }
+  .bot-btn.add{background:#e94560;color:#fff}
+  .bot-btn.add:hover{background:#d63851}
+  .bot-btn.add:disabled{background:#555;cursor:not-allowed}
+  .bot-btn.kick{background:transparent;color:#ff6b6b;border:1px solid #ff6b6b}
+  .bot-btn.kick:hover{background:#ff6b6b22}
+  
+  /* ── 聊天区 ── */
+  .chat-area{
+    flex:1;display:flex;flex-direction:column;background:#1a1a2e;min-width:0
+  }
+  .messages{
+    flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px
+  }
+  .messages::-webkit-scrollbar{width:6px}
+  .messages::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+  
+  .msg{
+    display:flex;gap:12px;max-width:80%;animation:fadeIn .2s ease
+  }
+  .msg.self{flex-direction:row-reverse;align-self:flex-end}
+  .msg.bot{/* default: user left, bot also left */}  
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  
+  .msg .avatar{
+    width:36px;height:36px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:18px;flex-shrink:0;
+    background:#0f3460
+  }
+  .msg.self .avatar{background:#e94560}
+  
+  .msg .bubble{
+    background:#16213e;padding:10px 16px;border-radius:12px;
+    border-top-left-radius:4px;font-size:14px;line-height:1.6;
+    position:relative
+  }
+  .msg.self .bubble{
+    background:#e94560;color:#fff;
+    border-radius:12px;border-top-right-radius:4px
+  }
+  .msg.system{align-self:center;max-width:100%}
+  .msg.system .bubble{
+    background:transparent;color:#666;font-size:12px;
+    text-align:center;padding:4px 12px
+  }
+  .msg .bubble .username{
+    font-size:12px;font-weight:600;margin-bottom:4px;display:block
+  }
+  .msg.self .bubble .username{color:rgba(255,255,255,.8)}
+  .msg .bubble .time{
+    font-size:11px;color:#666;margin-top:4px;display:block;text-align:right
+  }
+  .msg.self .bubble .time{color:rgba(255,255,255,.6)}
+  
+  /* Markdown 基础渲染 */
+  .bubble p{margin:4px 0}
+  .bubble code{
+    background:rgba(0,0,0,.3);padding:2px 6px;border-radius:4px;
+    font-size:13px;font-family:"SF Mono","Fira Code",monospace
+  }
+  .bubble pre{
+    background:rgba(0,0,0,.4);padding:12px;border-radius:8px;
+    overflow-x:auto;margin:8px 0
+  }
+  .bubble pre code{background:none;padding:0}
+  .bubble strong{font-weight:600}
+  
+  /* ── 输入区 ── */
+  .input-area{
+    padding:16px 20px;background:#16213e;border-top:1px solid #0f3460;
+    display:flex;gap:12px;align-items:flex-end;flex-shrink:0
+  }
+  .input-area textarea{
+    flex:1;background:#1a1a2e;border:1px solid #0f3460;border-radius:10px;
+    padding:12px 16px;color:#e0e0e0;font-size:14px;font-family:inherit;
+    resize:none;min-height:44px;max-height:120px;outline:none;
+    transition:border-color .2s
+  }
+  .input-area textarea:focus{border-color:#e94560}
+  .input-area textarea::placeholder{color:#555}
+  .send-btn{
+    padding:10px 24px;background:#e94560;color:#fff;border:none;
+    border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;
+    transition:background .2s;white-space:nowrap;height:44px
+  }
+  .send-btn:hover{background:#d63851}
+  .send-btn:disabled{background:#555;cursor:not-allowed}
+  
+  .typing-indicator{
+    font-size:12px;color:#888;padding:4px 20px;display:none;
+    animation:pulse 1.5s ease infinite
+  }
+  @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+  
+  /* ── 连接状态遮罩 ── */
+  .connect-overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.8);
+    display:flex;align-items:center;justify-content:center;
+    z-index:100;flex-direction:column;gap:16px
+  }
+  .connect-overlay.hidden{display:none}
+  .connect-overlay .spinner{
+    width:40px;height:40px;border:3px solid #333;
+    border-top-color:#e94560;border-radius:50%;animation:spin .8s linear infinite
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .connect-overlay p{color:#888;font-size:14px}
+  
+  /* ── 响应式 ── */
+  @media(max-width:768px){
+    .sidebar{position:fixed;left:-280px;top:0;bottom:0;z-index:50;transition:left .3s;width:280px}
+    .sidebar.open{left:0}
+    .sidebar-toggle{display:block}
+    .sidebar-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:49;display:none}
+    .sidebar-overlay.show{display:block}
+    .msg{max-width:90%}
+  }
+</style>
+</head>
+<body>
+
+<!-- 连接状态 -->
+<div class="connect-overlay" id="connectOverlay">
+  <div class="spinner"></div>
+  <p id="connectStatus">正在连接服务器...</p>
+</div>
+
+<!-- 侧边栏遮罩（移动端） -->
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<!-- 顶部栏 -->
+<header class="topbar">
+  <div>
+    <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+    <span><strong>🤖 多Bot群聊</strong></span>
+  </div>
+  <span class="status" id="connectionStatus"><span class="dot" style="background:#666"></span>连接中...</span>
+</header>
+
+<div class="layout">
+  <!-- 左侧栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-section">
+      <h3>🏠 主房间 · 成员</h3>
+      <div id="memberList"></div>
+    </div>
+    <div class="sidebar-section">
+      <h3>🤖 机器人管理</h3>
+      <p style="font-size:12px;color:#666;margin-bottom:12px">点击「加入」添加机器人到群聊</p>
+      <div class="bot-list" id="botList"></div>
+    </div>
+    <div class="sidebar-section" style="flex:1">
+      <h3>💡 使用提示</h3>
+      <ul style="font-size:12px;color:#888;list-style:none;line-height:1.8">
+        <li>• <code>@小帅</code> 让作家写文</li>
+        <li>• <code>@YY</code> 让编辑审稿</li>
+        <li>• <code>@读者</code> 让读者反馈</li>
+        <li>• 没被@时 bot 静默</li>
+      </ul>
+    </div>
+  </aside>
+
+  <!-- 聊天区 -->
+  <div class="chat-area">
+    <div class="messages" id="messages"></div>
+    <div class="typing-indicator" id="typingIndicator">bot 正在输入...</div>
+    <div class="input-area">
+      <textarea id="input" placeholder="输入消息... 用 @机器人 名字召唤 bot" rows="1"></textarea>
+      <button class="send-btn" id="sendBtn" disabled>发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 配置 ──
+const HTTP_PORT = 9092;
+const WS_PORT = 9091;
+const ROOM = "main";
+
+// ── 状态 ──
+let ws = null;
+let username = "用户_" + Math.random().toString(36).slice(2, 6);
+let connected = false;
+let availableBots = [];
+let memberNames = new Set();
+let reconnecting = false;
+
+// ── DOM ──
+const messagesEl = document.getElementById("messages");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("sendBtn");
+const memberListEl = document.getElementById("memberList");
+const botListEl = document.getElementById("botList");
+const overlay = document.getElementById("connectOverlay");
+const connectStatus = document.getElementById("connectStatus");
+const connStatusEl = document.getElementById("connectionStatus");
+const sidebarToggle = document.getElementById("sidebarToggle");
+const sidebar = document.getElementById("sidebar");
+const sidebarOverlay = document.getElementById("sidebarOverlay");
+
+// ── 工具 ──
+function escHTML(str) {
+  return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+            .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+function simpleMarkdown(text) {
+  // 简单的 Markdown 渲染
+  let html = escHTML(text);
+  // @提及高亮
+  html = html.replace(/@(\S+)/g, '<span style="color:#e94560;font-weight:600">@$1</span>');
+  // 代码块
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // 行内代码
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // 粗体
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // 换行
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
+function addMessage(data) {
+  const div = document.createElement("div");
+  
+  if (data.msg_type === "system") {
+    div.className = "msg system";
+    div.innerHTML = `<div class="bubble">${escHTML(data.content)}</div>`;
+  } else {
+    const isSelf = data.username === username;
+    const isBot = availableBots.includes(data.username);
+    div.className = `msg ${isSelf ? "self" : isBot ? "bot" : ""}`;
+    
+    let avatar = isSelf ? "🧑" : isBot ? getBotAvatar(data.username) : "👤";
+    
+    div.innerHTML = `
+      <div class="avatar">${avatar}</div>
+      <div class="bubble">
+        <span class="username">${isSelf ? "你" : escHTML(data.username)}</span>
+        ${simpleMarkdown(data.content)}
+        <span class="time">${data.time || ""}</span>
+      </div>
+    `;
+  }
+  
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function getBotAvatar(name) {
+  const avatars = {"小帅":"🎭","YY":"🌟","读者":"👤"};
+  return avatars[name] || "🤖";
+}
+
+function renderMembers(members) {
+  memberNames = new Set(members.map(m => m.username));
+  memberListEl.innerHTML = members.map(m => {
+    const isBot = m.role === "bot";
+    const avatar = isBot ? getBotAvatar(m.username) : m.username === username ? "🧑" : "👤";
+    return `<div class="member-item">
+      <span class="avatar">${avatar}</span>
+      <span class="name">${m.username === username ? "你 (" + username + ")" : escHTML(m.username)}</span>
+      <span class="tag ${isBot ? "bot" : ""}">${isBot ? "BOT" : "用户"}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderBots(members) {
+  botListEl.innerHTML = availableBots.map(name => {
+    const inRoom = members.some(m => m.username === name && m.role === "bot");
+    return `<div class="bot-item">
+      <div class="info">
+        <span>${getBotAvatar(name)}</span>
+        <span>${name}</span>
+      </div>
+      ${inRoom
+        ? `<button class="bot-btn kick" onclick="kickBot('${name}')">踢出</button>`
+        : `<button class="bot-btn add" onclick="addBot('${name}')">加入</button>`
+      }
+    </div>`;
+  }).join("");
+}
+
+// ── API ──
+async function fetchBots() {
+  try {
+    const r = await fetch(`/api/bots`);
+    availableBots = await r.json();
+  } catch(e) { console.error("获取bot列表失败:", e); }
+}
+
+async function addBot(name) {
+  try {
+    await fetch(`/api/add_bot?name=${encodeURIComponent(name)}`);
+  } catch(e) { console.error("添加bot失败:", e); }
+}
+
+async function kickBot(name) {
+  try {
+    await fetch(`/api/kick_bot?name=${encodeURIComponent(name)}`);
+  } catch(e) { console.error("踢出bot失败:", e); }
+}
+
+// ── WebSocket ──
+function getWsUrl() {
+  const loc = window.location;
+  const wsHost = loc.hostname;
+  // 如果通过 HTTP 端口访问，用相同 hostname 连 WS
+  return `ws://${wsHost}:${WS_PORT}/ws`;
+}
+
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) return;
+  
+  overlay.classList.remove("hidden");
+  connectStatus.textContent = "正在连接服务器...";
+  
+  const url = getWsUrl();
+  ws = new WebSocket(url);
+  
+  ws.onopen = () => {
+    connected = true;
+    overlay.classList.add("hidden");
+    connStatusEl.innerHTML = '<span class="dot" style="background:#4ade80"></span>已连接';
+    sendBtn.disabled = false;
+    
+    ws.send(JSON.stringify({
+      type: "join",
+      room: ROOM,
+      username: username,
+      role: "user"
+    }));
+  };
+  
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      switch (data.type) {
+        case "history":
+          messagesEl.innerHTML = "";
+          data.messages.forEach(addMessage);
+          break;
+        
+        case "members":
+          renderMembers(data.members);
+          renderBots(data.members);
+          break;
+        
+        case "members_updated":
+          // 刷新成员列表
+          break;
+        
+        case "message":
+          addMessage(data);
+          break;
+        
+        case "system":
+          addMessage({msg_type: "system", content: data.content});
+          break;
+        
+        case "pong":
+          break;
+      }
+    } catch(e) {
+      console.error("消息解析失败:", e);
+    }
+  };
+  
+  ws.onclose = () => {
+    connected = false;
+    connStatusEl.innerHTML = '<span class="dot" style="background:#666"></span>断开连接';
+    sendBtn.disabled = true;
+    
+    if (!reconnecting) {
+      reconnecting = true;
+      overlay.classList.remove("hidden");
+      connectStatus.textContent = "连接断开，5秒后重连...";
+      setTimeout(() => {
+        reconnecting = false;
+        connect();
+      }, 5000);
+    }
+  };
+  
+  ws.onerror = (e) => {
+    console.error("WebSocket 错误:", e);
+  };
+}
+
+function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text || !connected) return;
+  
+  ws.send(JSON.stringify({
+    type: "message",
+    room: ROOM,
+    content: text
+  }));
+  
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+}
+
+// ── 事件绑定 ──
+sendBtn.addEventListener("click", sendMessage);
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+});
+
+sidebarToggle.addEventListener("click", () => {
+  sidebar.classList.toggle("open");
+  sidebarOverlay.classList.toggle("show");
+});
+
+sidebarOverlay.addEventListener("click", () => {
+  sidebar.classList.remove("open");
+  sidebarOverlay.classList.remove("show");
+});
+
+// ── 定期 ping ──
+setInterval(() => {
+  if (connected && ws) {
+    ws.send(JSON.stringify({type: "ping"}));
+  }
+}, 30000);
+
+// ── 启动 ──
+async function init() {
+  await fetchBots();
+  connect();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "bots": {
+    "小帅": {
+      "profile": "writer",
+      "hermes_home": "/root/.hermes/profiles/writer/",
+      "description": "编故事 / 小说写作"
+    },
+    "YY": {
+      "profile": "editor",
+      "hermes_home": "/root/.hermes/profiles/editor/",
+      "description": "起点编辑 / 审稿评估"
+    },
+    "读者": {
+      "profile": "reader",
+      "hermes_home": "/root/.hermes/profiles/reader/",
+      "description": "读者视角反馈"
+    }
+  }
+}

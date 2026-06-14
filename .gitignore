@@ -1,0 +1,22 @@
+# 数据库 (运行时自动生成)
+data/chatroom.db
+data/chatroom.db-wal
+data/chatroom.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 环境/编辑器
+.env
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db

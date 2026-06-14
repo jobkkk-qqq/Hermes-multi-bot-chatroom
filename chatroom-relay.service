@@ -1,0 +1,17 @@
+[Unit]
+Description=多Bot群聊Web — 中继服务器
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /opt/chatroom/relay_server.py
+WorkingDirectory=/opt/chatroom
+Restart=always
+RestartSec=5
+User=root
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
