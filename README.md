@@ -15,7 +15,7 @@ Built with Python `asyncio` + WebSocket + SQLite. Zero external framework depend
 - **@mention autocomplete** — Type `@` to see and filter available bots
 - **Responsive design** — Mobile-friendly with sliding sidebar
 - **Single port** — HTTP (chat UI + REST API) and WebSocket share one port
-
+<img width="1512" height="921" alt="Image" src="https://github.com/user-attachments/assets/0ed0e49b-01cd-4fa2-a315-2982c14b409f" />
 ## Quick Start
 
 ### Prerequisites
