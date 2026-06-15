@@ -1,16 +1,26 @@
 {
   "bots": {
-    "小帅": {
+    "coding": {
+      "profile": "default",
+      "hermes_home": "/root/.hermes/",
+      "description": "统筹管理 / 指令分派"
+    },
+    "clawbot": {
+      "profile": "clawbot",
+      "hermes_home": "/root/.hermes/profiles/clawbot/",
+      "description": "通用助手 / 工具调用"
+    },
+    "writer": {
       "profile": "writer",
       "hermes_home": "/root/.hermes/profiles/writer/",
       "description": "编故事 / 小说写作"
     },
-    "YY": {
+    "editor": {
       "profile": "editor",
       "hermes_home": "/root/.hermes/profiles/editor/",
       "description": "起点编辑 / 审稿评估"
     },
-    "读者": {
+    "reader": {
       "profile": "reader",
       "hermes_home": "/root/.hermes/profiles/reader/",
       "description": "读者视角反馈"

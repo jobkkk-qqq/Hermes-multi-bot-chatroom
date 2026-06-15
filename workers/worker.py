@@ -14,6 +14,7 @@ from datetime import datetime
 
 # ── Bot 配置（从环境变量读取） ────────────────────
 BOT_NAME = os.environ.get("BOT_NAME", "")
+BOT_DISPLAY_NAME = os.environ.get("BOT_DISPLAY_NAME", BOT_NAME)
 BOT_PROFILE = os.environ.get("BOT_PROFILE", "")
 RELAY_WS_URL = os.environ.get("RELAY_WS_URL", "ws://127.0.0.1:9091/ws")
 ROOM_ID = os.environ.get("ROOM_ID", "main")
@@ -47,9 +48,13 @@ def setup_hermes():
     # 找到 hermes_cli
     hermes_home = HERMES_HOME
     # 尝试各种路径
-    possible_paths = [
+    hermes_venv_site = os.environ.get("HERMES_SITE_PACKAGES", "")
+    possible_paths = []
+    if hermes_venv_site:
+        possible_paths.append(hermes_venv_site)
+    possible_paths.extend([
         "/root/hermes-agent/hermes-agent-2026.5.16/venv/lib/python3.11/site-packages",
-    ]
+    ])
     
     for p in possible_paths:
         if os.path.exists(os.path.join(p, "hermes_cli")):
@@ -119,10 +124,10 @@ async def worker_main():
                 await ws.send(json.dumps({
                     "type": "join",
                     "room": ROOM_ID,
-                    "username": BOT_NAME,
+                    "username": BOT_DISPLAY_NAME,
                     "role": "bot"
                 }, ensure_ascii=False))
-                print(f"[worker] 🚪 已加入房间 {ROOM_ID} 作为 {BOT_NAME}", flush=True)
+                print(f"[worker] 🚪 已加入房间 {ROOM_ID} 作为 {BOT_DISPLAY_NAME}", flush=True)
                 
                 # 监听消息
                 async for raw in ws:
@@ -137,9 +142,9 @@ async def worker_main():
                         # 存入上下文
                         context.add(data)
                         
-                        # 检查是否被 @
+                        # 检查是否被 @（用显示名）
                         content = data.get("content", "")
-                        if f"@{BOT_NAME}" in content:
+                        if f"@{BOT_DISPLAY_NAME}" in content:
                             print(f"[worker] 📨 被 @了！消息: {content[:80]}...", flush=True)
                             await handle_mention(ws, data)
                     
@@ -177,7 +182,7 @@ async def handle_mention(ws, trigger_msg):
     
     content = trigger_msg.get("content", "")
     # 去掉 @机器人 部分，提取实际提问
-    mention = f"@{BOT_NAME}"
+    mention = f"@{BOT_DISPLAY_NAME}"
     question = content.replace(mention, "").strip()
     if not question:
         question = content
@@ -189,7 +194,7 @@ async def handle_mention(ws, trigger_msg):
     
     if run_oneshot is None:
         # 模拟模式
-        reply = f"（{BOT_NAME} 已收到消息，但没有 Hermes oneshot API，无法生成回复）"
+        reply = f"（{BOT_DISPLAY_NAME} 已收到消息，但没有 Hermes oneshot API，无法生成回复）"
         print(f"[worker] ⚠️  模拟模式，不实际调用", flush=True)
     else:
         try:

@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -15,8 +16,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import yaml
 import websockets
 from websockets.asyncio.server import serve, ServerConnection
+from websockets.http11 import Response, Headers
 
 # ── 路径 ────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -29,13 +32,32 @@ CONFIG_PATH = WORKERS_DIR / "config.json"
 
 # ── 配置 ────────────────────────────────────────
 HOST = "0.0.0.0"
-WS_PORT = 9091
-HTTP_PORT = 9092  # HTTP 服务端口（提供聊天页面 + API）
+PORT = 9092  # 单一端口，同时提供 HTTP 页面 + API + WebSocket
+HERMES_BASE = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+
+def load_bot_name(profile):
+    """从 profile 配置读取 bot.display_name"""
+    if profile == "default":
+        config_path = HERMES_BASE / "config.yaml"
+    else:
+        config_path = HERMES_BASE / "profiles" / profile / "config.yaml"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        return cfg.get("bot", {}).get("display_name", profile)
+    except Exception:
+        return profile
+
 AVAILABLE_BOTS = {
-    "小帅": {"profile": "writer", "name": "小帅", "avatar": "🎭"},
-    "YY":   {"profile": "editor", "name": "YY",   "avatar": "🌟"},
-    "读者": {"profile": "reader", "name": "读者", "avatar": "👤"},
+    "coding":  {"profile": "default", "avatar": "🐏"},
+    "clawbot": {"profile": "clawbot", "avatar": "🦀"},
+    "writer":  {"profile": "writer",  "avatar": "🎭"},
+    "editor":  {"profile": "editor",  "avatar": "🌟"},
+    "reader":  {"profile": "reader",  "avatar": "👤"},
 }
+# 从 profile 配置读取显示名
+for key, info in AVAILABLE_BOTS.items():
+    info["name"] = load_bot_name(info["profile"])
 
 # ── 数据库 ───────────────────────────────────────
 def init_db():
@@ -149,8 +171,9 @@ def spawn_bot_worker(bot_name):
     
     env = os.environ.copy()
     env["BOT_NAME"] = bot_name
+    env["BOT_DISPLAY_NAME"] = bot_info.get("name", bot_name)
     env["BOT_PROFILE"] = bot_info["profile"]
-    env["RELAY_WS_URL"] = f"ws://127.0.0.1:{WS_PORT}/ws"
+    env["RELAY_WS_URL"] = f"ws://127.0.0.1:{PORT}/ws"
     env["ROOM_ID"] = "main"
     
     venv_python = str(BASE_DIR.parent / "chatroom-venv/bin/python3")
@@ -235,80 +258,71 @@ def get_room(room_id):
         rooms[room_id] = Room(room_id)
     return rooms[room_id]
 
-# ── HTTP 服务（提供聊天页面 + API）───────────────
-async def handle_http(reader, writer):
-    """简单的 HTTP 服务"""
-    try:
-        request_data = await asyncio.wait_for(reader.read(65536), timeout=10)
-    except asyncio.TimeoutError:
-        writer.close()
-        return
-    
-    if not request_data:
-        writer.close()
-        return
-    
-    request_text = request_data.decode("utf-8", errors="replace")
-    lines = request_text.split("\r\n")
-    if not lines:
-        writer.close()
-        return
-    
-    first_line = lines[0]
-    method = first_line.split(" ")[0] if " " in first_line else "GET"
-    path = first_line.split(" ")[1] if first_line.count(" ") >= 1 else "/"
-    
-    def json_response(data, status=200):
+def get_online_members(room_id):
+    """获取完整成员列表：数据库中的 bot + 当前在线的非 bot 用户"""
+    members = get_members(room_id)  # 数据库中的 bot
+    room = rooms.get(room_id)
+    if room:
+        for uname in room.clients:
+            exists = any(m["username"] == uname for m in members)
+            if not exists:
+                members.append({"username": uname, "role": "user"})
+    return members
+
+# ── HTTP 处理（通过 WebSocket 服务的 process_request 回调）─
+async def process_request(connection, request):
+    """处理非 WebSocket 的 HTTP 请求（API + 静态文件）"""
+    path = request.path
+
+    # WebSocket 升级请求放行
+    if path == "/ws":
+        return None
+
+    def json_resp(data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        header = f"HTTP/1.1 {status} OK\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {len(body)}\r\n\r\n"
-        return header.encode("utf-8") + body
-    
+        return Response(status, "OK", Headers({
+            "Content-Type": "application/json; charset=utf-8",
+            "Access-Control-Allow-Origin": "*",
+            "Content-Length": str(len(body)),
+        }), body)
+
     # ── API ──
     if path == "/api/bots":
-        writer.write(json_response(list(AVAILABLE_BOTS.keys())))
-        await writer.drain()
-        writer.close()
-        return
-    
+        return json_resp([
+            {"key": k, "name": v.get("name", k), "avatar": v.get("avatar", "🤖")}
+            for k, v in AVAILABLE_BOTS.items()
+        ])
+
     if path == "/api/members":
-        writer.write(json_response(get_members("main")))
-        await writer.drain()
-        writer.close()
-        return
-    
+        return json_resp(get_online_members("main"))
+
     if path == "/api/history":
-        writer.write(json_response(get_history("main")))
-        await writer.drain()
-        writer.close()
-        return
-    
+        return json_resp(get_history("main"))
+
     if path.startswith("/api/add_bot"):
         bot_name = path.split("=")[-1] if "=" in path else ""
         if bot_name in AVAILABLE_BOTS:
             add_member("main", bot_name, "bot")
             spawn_bot_worker(bot_name)
-            # 🔔 唤醒对应的 Feishu gateway
+            # 🔔 唤醒对应的 Feishu gateway（后台执行，不等待）
             bot_profile = AVAILABLE_BOTS[bot_name].get("profile", "")
             if bot_profile:
-                proc = await asyncio.create_subprocess_exec(
-                    "bash", "/novel/scripts/gateway-wake.sh", bot_profile,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL
+                asyncio.create_task(
+                    asyncio.create_subprocess_exec(
+                        "bash", "/novel/scripts/gateway-wake.sh", bot_profile,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL
+                    )
                 )
-                # 不 await，让唤醒在后台进行
             room = get_room("main")
             room.broadcast({
                 "type": "system",
                 "content": f"{AVAILABLE_BOTS[bot_name]['avatar']} {bot_name} 加入了群聊"
             })
             room.broadcast({"type": "members_updated"})
-            writer.write(json_response({"ok": True}))
-        else:
-            writer.write(json_response({"ok": False, "error": "未知 bot"}))
-        await writer.drain()
-        writer.close()
-        return
-    
+            return json_resp({"ok": True})
+        return json_resp({"ok": False, "error": "未知 bot"})
+
     if path.startswith("/api/kick_bot"):
         bot_name = path.split("=")[-1] if "=" in path else ""
         if bot_name in AVAILABLE_BOTS:
@@ -320,31 +334,21 @@ async def handle_http(reader, writer):
                 "content": f"{bot_name} 被移出了群聊"
             })
             room.broadcast({"type": "members_updated"})
-            writer.write(json_response({"ok": True}))
-        else:
-            writer.write(json_response({"ok": False}))
-        await writer.drain()
-        writer.close()
-        return
-    
+            return json_resp({"ok": True})
+        return json_resp({"ok": False})
+
     # ── 静态文件 ──
     if path == "/" or path == "/index.html":
         file_path = STATIC_DIR / "chat.html"
     else:
-        # 去掉前导 /
         file_path = STATIC_DIR / path.lstrip("/")
-        # 安全检查：不允许跳出 static 目录
         try:
             file_path = file_path.resolve()
             if not str(file_path).startswith(str(STATIC_DIR.resolve())):
-                writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-                writer.close()
-                return
+                return Response(403, "Forbidden", Headers({"Content-Length": "0"}), b"")
         except:
-            writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-            writer.close()
-            return
-    
+            return Response(403, "Forbidden", Headers({"Content-Length": "0"}), b"")
+
     if file_path.exists() and file_path.is_file():
         content = file_path.read_bytes()
         ext = file_path.suffix
@@ -356,14 +360,12 @@ async def handle_http(reader, writer):
             ".svg":  "image/svg+xml",
             ".ico":  "image/x-icon",
         }.get(ext, "application/octet-stream")
-        header = f"HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {len(content)}\r\n\r\n"
-        response = header.encode("utf-8") + content
-        writer.write(response)
-    else:
-        writer.write(b"HTTP/1.1 404 Not Found\r\n\r\nPage Not Found")
-    
-    await writer.drain()
-    writer.close()
+        return Response(200, "OK", Headers({
+            "Content-Type": mime,
+            "Content-Length": str(len(content)),
+        }), content)
+
+    return Response(404, "Not Found", Headers({"Content-Length": "0"}), b"")
 
 # ── WebSocket 处理 ───────────────────────────────
 async def handle_ws(ws: ServerConnection):
@@ -385,7 +387,9 @@ async def handle_ws(ws: ServerConnection):
                 username = data.get("username", "匿名用户")
                 role = data.get("role", "user")
                 room.add_client(username, ws)
-                add_member(room_id, username, role)
+                # 只有 bot 成员持久化到数据库，普通用户仅在内存中跟踪
+                if role == "bot":
+                    add_member(room_id, username, role)
                 
                 # 发送历史消息
                 history = get_history(room_id)
@@ -394,8 +398,8 @@ async def handle_ws(ws: ServerConnection):
                     "messages": history
                 }, ensure_ascii=False))
                 
-                # 发送当前成员列表
-                members = get_members(room_id)
+                # 发送当前成员列表（数据库中的 bot + 内存中的在线用户）
+                members = get_online_members(room_id)
                 await ws.send(json.dumps({
                     "type": "members",
                     "members": members
@@ -449,20 +453,34 @@ async def handle_ws(ws: ServerConnection):
                 room.broadcast({"type": "members_updated"})
             print(f"[relay] '{username}' 断开连接")
 
+# ── 工具 ───────────────────────────────────────────
+def get_local_ip():
+    """获取本机局域网 IP"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 # ── 主入口 ────────────────────────────────────────
 async def main():
     init_db()
     
-    # 启动 HTTP 服务
-    http_server = await asyncio.start_server(handle_http, HOST, HTTP_PORT)
-    print(f"[relay] 🌐 HTTP 服务: http://{HOST}:{HTTP_PORT}/")
-    
-    # 启动 WebSocket 服务
-    async with serve(handle_ws, HOST, WS_PORT) as ws_server:
-        print(f"[relay] 🔌 WebSocket 服务: ws://{HOST}:{WS_PORT}/ws")
+    async with serve(handle_ws, HOST, PORT, process_request=process_request) as server:
+        local_ip = get_local_ip()
         print(f"[relay] 🚀 中继服务器已启动")
-        print(f"[relay] 📍 聊天页面: http://192.168.1.111:{HTTP_PORT}/")
-        print(f"[relay] 📡 WebSocket 端口: {WS_PORT}")
+        print(f"[relay] 📍 聊天页面: http://{local_ip}:{PORT}/")
+        print(f"[relay] 🔌 WebSocket（同端口）: ws://{local_ip}:{PORT}/ws")
+        print()
+        
+        # 自动恢复所有可用 bot
+        for bot_key in AVAILABLE_BOTS:
+            add_member("main", bot_key, "bot")
+            spawn_bot_worker(bot_key)
+            print(f"[relay] 🔄 自动恢复 bot: {bot_key}")
         print()
         
         # 处理 SIGTERM/SIGINT
@@ -470,18 +488,17 @@ async def main():
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 asyncio.get_running_loop().add_signal_handler(
-                    sig, lambda: asyncio.ensure_future(shutdown(ws_server, http_server))
+                    sig, lambda: asyncio.ensure_future(shutdown(server))
                 )
             except NotImplementedError:
                 pass
         
-        await ws_server.serve_forever()
+        await server.serve_forever()
 
-async def shutdown(ws_server, http_server):
+async def shutdown(server):
     print("\n[relay] 🛑 正在关闭中继服务器...")
     kill_all_workers()
-    ws_server.close()
-    http_server.close()
+    server.close()
     print("[relay] ✅ 已关闭")
 
 if __name__ == "__main__":
