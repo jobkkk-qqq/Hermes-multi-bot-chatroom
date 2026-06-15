@@ -202,17 +202,24 @@ async def handle_mention(ws, trigger_msg):
             os.environ["HERMES_HOME"] = HERMES_HOME
             os.environ["HERMES_YOLO"] = "true"
             
-            # 捕获 stdout（oneshot 把回复打印到 stdout，返回 int 退出码）
-            stdout_capture = io.StringIO()
-            old_stdout = sys.stdout
-            sys.stdout = stdout_capture
+            # 在线程池中运行 oneshot，避免阻塞事件循环
+            loop = asyncio.get_running_loop()
             
-            try:
-                exit_code = run_oneshot(prompt=prompt)
-            finally:
-                sys.stdout = old_stdout
+            def _run_oneshot():
+                """同步执行 oneshot 并捕获输出"""
+                stdout_capture = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = stdout_capture
+                try:
+                    ec = run_oneshot(prompt=prompt)
+                finally:
+                    sys.stdout = old_stdout
+                return ec, stdout_capture.getvalue().strip()
             
-            captured = stdout_capture.getvalue().strip()
+            exit_code, captured = await asyncio.wait_for(
+                loop.run_in_executor(None, _run_oneshot),
+                timeout=120
+            )
             
             if exit_code == 0 and captured:
                 reply = captured
@@ -221,6 +228,9 @@ async def handle_mention(ws, trigger_msg):
             else:
                 reply = f"（处理出错，退出码: {exit_code}）"
                 print(f"[worker] ⚠️ oneshot 退出码: {exit_code}", flush=True)
+        except asyncio.TimeoutError:
+            reply = "（处理超时，请稍后重试）"
+            print(f"[worker] ⏰ oneshot 超时（120s）", flush=True)
         except Exception as e:
             reply = f"（处理出错: {e}）"
             print(f"[worker] ❌ oneshot 调用失败: {e}", flush=True)
