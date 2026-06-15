@@ -192,7 +192,7 @@ async def handle_mention(ws, trigger_msg):
     
     # ── 思考中心跳（每 5 秒发一次状态）──
     async def thinking_heartbeat(stop_event):
-        """每 5 秒发一次 thinking 状态，直到 stop_event 被设置"""
+        """每 10 秒发一次 thinking 状态，直到 stop_event 被设置"""
         statuses = ["正在思考...", "正在分析内容...", "仍在处理中...", "快好了...", "马上就好..."]
         idx = 0
         while not stop_event.is_set():
@@ -206,7 +206,7 @@ async def handle_mention(ws, trigger_msg):
             except:
                 pass
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=5)
+                await asyncio.wait_for(stop_event.wait(), timeout=10)
             except asyncio.TimeoutError:
                 continue
     

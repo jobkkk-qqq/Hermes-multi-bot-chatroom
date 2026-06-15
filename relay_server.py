@@ -35,6 +35,19 @@ HOST = "0.0.0.0"
 PORT = 9092  # 单一端口，同时提供 HTTP 页面 + API + WebSocket
 HERMES_BASE = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
 
+def check_gateway_status(profile):
+    """检查 Hermes gateway 运行状态"""
+    svc = "hermes-gateway" if profile == "default" else f"hermes-gateway-{profile}"
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", "-p", "ActiveState", svc],
+            capture_output=True, text=True, timeout=5
+        )
+        state = r.stdout.strip().split("=")[-1] if "=" in r.stdout else "inactive"
+        return state if state else "inactive"
+    except Exception:
+        return "unknown"
+
 def load_bot_name(profile):
     """从 profile 配置读取 bot.display_name"""
     if profile == "default":
@@ -289,7 +302,10 @@ async def process_request(connection, request):
     # ── API ──
     if path == "/api/bots":
         return json_resp([
-            {"key": k, "name": v.get("name", k), "avatar": v.get("avatar", "🤖")}
+            {
+                "key": k, "name": v.get("name", k), "avatar": v.get("avatar", "🤖"),
+                "gateway": check_gateway_status(v["profile"])
+            }
             for k, v in AVAILABLE_BOTS.items()
         ])
 

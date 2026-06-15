@@ -41,6 +41,10 @@
   .member-item .name{flex:1}
   .member-item .tag{font-size:11px;padding:2px 8px;border-radius:10px;background:#e94560;color:#fff}
   .member-item .tag.bot{background:#0f3460;color:#e94560;border:1px solid #e94560}
+  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .status-dot.active{background:#4ade80;box-shadow:0 0 4px #4ade8080}
+  .status-dot.inactive,.status-dot.failed{background:#666}
+  .status-dot.unknown{background:#888}
   
   .bot-list{margin-top:8px}
   .bot-item{
@@ -361,9 +365,12 @@ function renderMembers(members) {
   memberListEl.innerHTML = members.map(m => {
     const isBot = m.role === "bot";
     const avatar = isBot ? getBotAvatar(m.username) : m.username === username ? "🧑" : "👤";
+    // 查找 gateway 状态
+    const botInfo = isBot ? availableBots.find(b => b.name === m.username) : null;
+    const dot = botInfo ? `<span class="status-dot ${botInfo.gateway}"></span>` : "";
     return `<div class="member-item">
       <span class="avatar">${avatar}</span>
-      <span class="name">${m.username === username ? "你 (" + username + ")" : escHTML(m.username)}</span>
+      <span class="name">${dot}${m.username === username ? "你 (" + username + ")" : escHTML(m.username)}</span>
       <span class="tag ${isBot ? "bot" : ""}">${isBot ? "BOT" : "用户"}</span>
     </div>`;
   }).join("");
@@ -372,10 +379,11 @@ function renderMembers(members) {
 function renderBots(members) {
   botListEl.innerHTML = availableBots.map(bot => {
     const inRoom = members.some(m => m.username === bot.name && m.role === "bot");
+    const dotClass = bot.gateway || "unknown";
     return `<div class="bot-item">
       <div class="info">
         <span>${bot.avatar}</span>
-        <span>${bot.name}</span>
+        <span><span class="status-dot ${dotClass}"></span>${bot.name}</span>
       </div>
       ${inRoom
         ? `<button class="bot-btn kick" onclick="kickBot('${bot.key}')">踢出</button>`
@@ -520,10 +528,13 @@ function connect() {
           break;
         
         case "members_updated":
-          // 刷新成员列表
+          // 刷新成员列表 + gateway 状态
           fetch("/api/members").then(r=>r.json()).then(members=>{
             renderMembers(members);
             renderBots(members);
+          }).catch(()=>{});
+          fetch("/api/bots").then(r=>r.json()).then(list=>{
+            availableBots = list;
           }).catch(()=>{});
           break;
         
@@ -675,6 +686,22 @@ sidebarOverlay.addEventListener("click", () => {
 setInterval(() => {
   if (connected && ws) {
     ws.send(JSON.stringify({type: "ping"}));
+  }
+}, 30000);
+
+// 每 30 秒刷新 gateway 状态
+setInterval(() => {
+  if (connected) {
+    fetch("/api/bots").then(r=>r.json()).then(list=>{
+      availableBots = list;
+      // 如果有成员列表，重新渲染 bot 状态
+      const membersEl = document.getElementById("memberList");
+      if (membersEl && membersEl.children.length > 0) {
+        fetch("/api/members").then(r=>r.json()).then(members=>{
+          renderBots(members);
+        }).catch(()=>{});
+      }
+    }).catch(()=>{});
   }
 }, 30000);
 
