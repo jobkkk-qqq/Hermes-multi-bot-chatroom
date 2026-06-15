@@ -163,6 +163,18 @@ async def worker_main():
 
 async def handle_mention(ws, trigger_msg):
     """处理 @mention"""
+    # 🔔 唤醒对应的 Feishu gateway（异步执行，不阻塞回复）
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", "/novel/scripts/gateway-wake.sh", BOT_PROFILE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        # 不 await，让唤醒在后台进行
+        print(f"[worker] 🔔 已触发唤醒 Feishu gateway ({BOT_PROFILE})", flush=True)
+    except Exception as e:
+        print(f"[worker] ⚠️ 唤醒 gateway 失败: {e}", flush=True)
+    
     content = trigger_msg.get("content", "")
     # 去掉 @机器人 部分，提取实际提问
     mention = f"@{BOT_NAME}"

@@ -287,6 +287,15 @@ async def handle_http(reader, writer):
         if bot_name in AVAILABLE_BOTS:
             add_member("main", bot_name, "bot")
             spawn_bot_worker(bot_name)
+            # 🔔 唤醒对应的 Feishu gateway
+            bot_profile = AVAILABLE_BOTS[bot_name].get("profile", "")
+            if bot_profile:
+                proc = await asyncio.create_subprocess_exec(
+                    "bash", "/novel/scripts/gateway-wake.sh", bot_profile,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                # 不 await，让唤醒在后台进行
             room = get_room("main")
             room.broadcast({
                 "type": "system",
