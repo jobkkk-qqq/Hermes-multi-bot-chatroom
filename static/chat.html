@@ -244,12 +244,9 @@
     <div class="sidebar-section" style="flex:1">
       <h3>💡 使用提示</h3>
       <ul style="font-size:12px;color:#888;list-style:none;line-height:1.8">
-        <li>• <code>@coding</code> 统筹管理 / 分派任务</li>
-        <li>• <code>@clawbot</code> 通用助手</li>
-        <li>• <code>@writer</code> 让作家写文</li>
-        <li>• <code>@editor</code> 让编辑审稿</li>
-        <li>• <code>@reader</code> 让读者反馈</li>
-        <li>• 没被@时 bot 静默</li>
+        <li>• <code>@机器人名</code> 召唤对应的 bot 处理任务</li>
+        <li>• 没被@时 bot 静默（不消耗 token）</li>
+        <li>• 🟢 绿点 = gateway 在线，⚪ 灰点 = gateway 已停</li>
       </ul>
     </div>
   </aside>
@@ -264,7 +261,7 @@
     <div class="typing-indicator" id="typingIndicator">bot 正在输入...</div>
     <div class="input-area">
       <div class="mention-dropdown" id="mentionDropdown"></div>
-      <textarea id="input" placeholder='输入消息... 用 @coding、@clawbot、@writer、@editor、@reader 召唤 bot' rows="1"></textarea>
+      <textarea id="input" placeholder='输入消息... 用 @机器人名 召唤 bot（如 @writer）' rows="1"></textarea>
       <button class="send-btn" id="sendBtn" disabled>发送</button>
     </div>
   </div>
@@ -544,6 +541,16 @@ function connect() {
           if (thinkingBar.classList.contains("show") && availableBots.some(b => b.name === data.username)) {
             thinkingBar.classList.remove("show");
           }
+          // bot 回复了，刷新 gateway 状态（可能刚被唤醒）
+          if (availableBots.some(b => b.name === data.username)) {
+            fetch("/api/bots").then(r=>r.json()).then(list=>{
+              availableBots = list;
+              fetch("/api/members").then(r=>r.json()).then(members=>{
+                renderBots(members);
+                renderMembers(members);
+              }).catch(()=>{});
+            }).catch(()=>{});
+          }
           break;
         
         case "system":
@@ -616,6 +623,15 @@ function sendMessage() {
   
   inputEl.value = "";
   inputEl.style.height = "auto";
+  
+  // 发送 @ 消息后刷新 gateway 状态（可能触发唤醒）
+  if (text.includes("@")) {
+    setTimeout(() => {
+      fetch("/api/bots").then(r=>r.json()).then(list=>{
+        availableBots = list;
+      }).catch(()=>{});
+    }, 2000);
+  }
 }
 
 // ── 事件绑定 ──

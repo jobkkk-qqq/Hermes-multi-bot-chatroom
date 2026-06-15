@@ -54,6 +54,8 @@ def setup_hermes():
         possible_paths.append(hermes_venv_site)
     possible_paths.extend([
         "/root/hermes-agent/hermes-agent-2026.5.16/venv/lib/python3.11/site-packages",
+        "/root/hermes-agent/hermes-agent-2026.5.16/venv/lib/python3.13/site-packages",
+        os.path.expanduser("~/.hermes/hermes-agent/venv/lib/python3.11/site-packages"),
     ])
     
     for p in possible_paths:
@@ -168,17 +170,21 @@ async def worker_main():
 
 async def handle_mention(ws, trigger_msg):
     """处理 @mention"""
-    # 🔔 唤醒对应的 Feishu gateway（异步执行，不阻塞回复）
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "bash", "/novel/scripts/gateway-wake.sh", BOT_PROFILE,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
-        # 不 await，让唤醒在后台进行
-        print(f"[worker] 🔔 已触发唤醒 Feishu gateway ({BOT_PROFILE})", flush=True)
-    except Exception as e:
-        print(f"[worker] ⚠️ 唤醒 gateway 失败: {e}", flush=True)
+    # 🔔 唤醒对应的 Feishu gateway（可选，文件存在时才执行）
+    wake_script = "/novel/scripts/gateway-wake.sh"
+    if os.path.exists(wake_script):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bash", wake_script, BOT_PROFILE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            # 不 await，让唤醒在后台进行
+            print(f"[worker] 🔔 已触发唤醒 Feishu gateway ({BOT_PROFILE})", flush=True)
+        except Exception as e:
+            print(f"[worker] ⚠️ 唤醒 gateway 失败: {e}", flush=True)
+    else:
+        print(f"[worker] ℹ️  gateway-wake.sh 不存在，跳过唤醒", flush=True)
     
     content = trigger_msg.get("content", "")
     # 去掉 @机器人 部分，提取实际提问

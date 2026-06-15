@@ -35,19 +35,7 @@ HOST = "0.0.0.0"
 PORT = 9092  # 单一端口，同时提供 HTTP 页面 + API + WebSocket
 HERMES_BASE = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
 
-def check_gateway_status(profile):
-    """检查 Hermes gateway 运行状态"""
-    svc = "hermes-gateway" if profile == "default" else f"hermes-gateway-{profile}"
-    try:
-        r = subprocess.run(
-            ["systemctl", "show", "-p", "ActiveState", svc],
-            capture_output=True, text=True, timeout=5
-        )
-        state = r.stdout.strip().split("=")[-1] if "=" in r.stdout else "inactive"
-        return state if state else "inactive"
-    except Exception:
-        return "unknown"
-
+# ── 工具函数（需在 detect_profiles 之前定义）─────
 def load_bot_name(profile):
     """从 profile 配置读取 bot.display_name"""
     if profile == "default":
@@ -61,16 +49,82 @@ def load_bot_name(profile):
     except Exception:
         return profile
 
-AVAILABLE_BOTS = {
-    "coding":  {"profile": "default", "avatar": "🐏"},
-    "clawbot": {"profile": "clawbot", "avatar": "🦀"},
-    "writer":  {"profile": "writer",  "avatar": "🎭"},
-    "editor":  {"profile": "editor",  "avatar": "🌟"},
-    "reader":  {"profile": "reader",  "avatar": "👤"},
-}
-# 从 profile 配置读取显示名
-for key, info in AVAILABLE_BOTS.items():
-    info["name"] = load_bot_name(info["profile"])
+def check_gateway_status(profile):
+    """检查 Hermes gateway 运行状态"""
+    svc = "hermes-gateway" if profile == "default" else f"hermes-gateway-{profile}"
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", "-p", "ActiveState", svc],
+            capture_output=True, text=True, timeout=5
+        )
+        state = r.stdout.strip().split("=")[-1] if "=" in r.stdout else "inactive"
+        return state if state else "inactive"
+    except Exception:
+        return "unknown"
+
+# ── Profile 自动发现 ──────────────────────────────
+PROFILE_AVATARS = ["🐏", "🦀", "🎭", "🌟", "👤", "🤖", "🦊", "🐱", "🐶", "🐰",
+                    "🐼", "🐨", "🦁", "🐯", "🦄", "🐲", "🐧", "🦉", "🐺", "🐸"]
+
+def detect_profiles():
+    """自动检测 Hermes profile，生成 AVAILABLE_BOTS"""
+    bots = {}
+    # 使用绝对路径，兼容受限 PATH 环境
+    hermes_cmd = os.environ.get("HERMES_CLI", "/root/.local/bin/hermes")
+    try:
+        r = subprocess.run([hermes_cmd, "profile", "list"],
+                           capture_output=True, text=True, timeout=10)
+        lines = r.stdout.strip().split("\n")
+        profiles = []
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("─") or "Profile" in line:
+                continue
+            # 去掉 ◆ 标记，取第一列 profile 名
+            name = line.replace("◆", "").strip().split()[0]
+            if name:
+                profiles.append(name)
+        
+        for i, name in enumerate(profiles):
+            display = load_bot_name(name)
+            avatar = PROFILE_AVATARS[i % len(PROFILE_AVATARS)]
+            bots[name] = {"profile": name, "avatar": avatar, "name": display}
+        
+        if bots:
+            print(f"[relay] 🔍 自动发现 {len(bots)} 个 profile: {', '.join(bots.keys())}")
+            return bots
+    except FileNotFoundError:
+        print("[relay] ⚠️  hermes 命令未找到，使用默认 bot 列表")
+    except Exception as e:
+        print(f"[relay] ⚠️  profile 检测失败: {e}")
+    
+    # 降级：空列表，用户可手动配置
+    print("[relay] ℹ️  没有可用 profile，将使用空 bot 列表")
+    return {}
+
+AVAILABLE_BOTS = detect_profiles()
+
+def ensure_config_json():
+    """动态生成 worker config.json"""
+    config = {"bots": {}}
+    for key, info in AVAILABLE_BOTS.items():
+        profile = info["profile"]
+        if profile == "default":
+            hermes_home = str(HERMES_BASE)
+        else:
+            hermes_home = str(HERMES_BASE / "profiles" / profile)
+        config["bots"][key] = {
+            "profile": profile,
+            "hermes_home": hermes_home,
+            "description": f"Hermes Agent ({profile})"
+        }
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+    print(f"[relay] 📝 已生成 {CONFIG_PATH} ({len(config['bots'])} bots)")
+
+# 启动时生成 config.json
+ensure_config_json()
 
 # ── 数据库 ───────────────────────────────────────
 def init_db():
@@ -193,10 +247,19 @@ def spawn_bot_worker(bot_name):
     if not os.path.exists(venv_python):
         venv_python = sys.executable
     
-    # 优先使用 Hermes venv 的 Python（兼容 oneshot 的 C 扩展）
-    hermes_python = "/root/hermes-agent/hermes-agent-2026.5.16/venv/bin/python3"
-    if os.path.exists(hermes_python):
+    # 如果 HERMES_VENV_PYTHON 环境变量设置了，用那个（兼容不同的 Hermes 安装路径）
+    hermes_python = os.environ.get("HERMES_VENV_PYTHON", "")
+    if hermes_python and os.path.exists(hermes_python):
         venv_python = hermes_python
+    # 尝试常见 Hermes 安装路径
+    elif not hermes_python:
+        for candidate in [
+            "/root/hermes-agent/hermes-agent-2026.5.16/venv/bin/python3",
+            os.path.expanduser("~/.hermes/hermes-agent/venv/bin/python3"),
+        ]:
+            if os.path.exists(candidate):
+                venv_python = candidate
+                break
     
     try:
         proc = subprocess.Popen(
@@ -322,10 +385,11 @@ async def process_request(connection, request):
             spawn_bot_worker(bot_name)
             # 🔔 唤醒对应的 Feishu gateway（后台执行，不等待）
             bot_profile = AVAILABLE_BOTS[bot_name].get("profile", "")
-            if bot_profile:
+            wake_script = "/novel/scripts/gateway-wake.sh"
+            if bot_profile and os.path.exists(wake_script):
                 asyncio.create_task(
                     asyncio.create_subprocess_exec(
-                        "bash", "/novel/scripts/gateway-wake.sh", bot_profile,
+                        "bash", wake_script, bot_profile,
                         stdout=asyncio.subprocess.DEVNULL,
                         stderr=asyncio.subprocess.DEVNULL
                     )
