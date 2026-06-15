@@ -561,10 +561,11 @@ async def main():
         print()
         
         # 自动恢复所有可用 bot
-        for bot_key in AVAILABLE_BOTS:
-            add_member("main", bot_key, "bot")
+        for bot_key, bot_info in AVAILABLE_BOTS.items():
+            display_name = bot_info.get("name", bot_key)
+            add_member("main", display_name, "bot")
             spawn_bot_worker(bot_key)
-            print(f"[relay] 🔄 自动恢复 bot: {bot_key}")
+            print(f"[relay] 🔄 自动恢复 bot: {display_name}")
         print()
         
         # 处理 SIGTERM/SIGINT
