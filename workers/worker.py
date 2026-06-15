@@ -190,50 +190,86 @@ async def handle_mention(ws, trigger_msg):
     # 构建上下文 prompt
     prompt = context.build_prompt(target_message=content)
     
+    # ── 思考中心跳（每 5 秒发一次状态）──
+    async def thinking_heartbeat(stop_event):
+        """每 5 秒发一次 thinking 状态，直到 stop_event 被设置"""
+        statuses = ["正在思考...", "正在分析内容...", "仍在处理中...", "快好了...", "马上就好..."]
+        idx = 0
+        while not stop_event.is_set():
+            try:
+                await ws.send(json.dumps({
+                    "type": "thinking",
+                    "username": BOT_DISPLAY_NAME,
+                    "status": statuses[idx % len(statuses)]
+                }, ensure_ascii=False))
+                idx += 1
+            except:
+                pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                continue
+    
+    stop_heartbeat = asyncio.Event()
+    hb_task = asyncio.create_task(thinking_heartbeat(stop_heartbeat))
+    
     print(f"[worker] 🧠 正在调用 Hermes oneshot...", flush=True)
     
-    if run_oneshot is None:
-        # 模拟模式
-        reply = f"（{BOT_DISPLAY_NAME} 已收到消息，但没有 Hermes oneshot API，无法生成回复）"
-        print(f"[worker] ⚠️  模拟模式，不实际调用", flush=True)
-    else:
+    try:
+        if run_oneshot is None:
+            # 模拟模式
+            reply = f"（{BOT_DISPLAY_NAME} 已收到消息，但没有 Hermes oneshot API，无法生成回复）"
+            print(f"[worker] ⚠️  模拟模式，不实际调用", flush=True)
+        else:
+            try:
+                # 设置 HERMES_HOME 环境
+                os.environ["HERMES_HOME"] = HERMES_HOME
+                os.environ["HERMES_YOLO"] = "true"
+                
+                # 在线程池中运行 oneshot，避免阻塞事件循环
+                loop = asyncio.get_running_loop()
+                
+                def _run_oneshot():
+                    """同步执行 oneshot 并捕获输出"""
+                    stdout_capture = io.StringIO()
+                    old_stdout = sys.stdout
+                    sys.stdout = stdout_capture
+                    try:
+                        ec = run_oneshot(prompt=prompt)
+                    finally:
+                        sys.stdout = old_stdout
+                    return ec, stdout_capture.getvalue().strip()
+                
+                exit_code, captured = await asyncio.wait_for(
+                    loop.run_in_executor(None, _run_oneshot),
+                    timeout=120
+                )
+                
+                if exit_code == 0 and captured:
+                    reply = captured
+                elif exit_code == 0 and not captured:
+                    reply = "（处理完成，但未生成回复）"
+                else:
+                    reply = f"（处理出错，退出码: {exit_code}）"
+                    print(f"[worker] ⚠️ oneshot 退出码: {exit_code}", flush=True)
+            except asyncio.TimeoutError:
+                reply = "（处理超时，请稍后重试）"
+                print(f"[worker] ⏰ oneshot 超时（120s）", flush=True)
+            except Exception as e:
+                reply = f"（处理出错: {e}）"
+                print(f"[worker] ❌ oneshot 调用失败: {e}", flush=True)
+    finally:
+        # 停止心跳
+        stop_heartbeat.set()
+        await hb_task
+        # 发送心跳结束信号
         try:
-            # 设置 HERMES_HOME 环境
-            os.environ["HERMES_HOME"] = HERMES_HOME
-            os.environ["HERMES_YOLO"] = "true"
-            
-            # 在线程池中运行 oneshot，避免阻塞事件循环
-            loop = asyncio.get_running_loop()
-            
-            def _run_oneshot():
-                """同步执行 oneshot 并捕获输出"""
-                stdout_capture = io.StringIO()
-                old_stdout = sys.stdout
-                sys.stdout = stdout_capture
-                try:
-                    ec = run_oneshot(prompt=prompt)
-                finally:
-                    sys.stdout = old_stdout
-                return ec, stdout_capture.getvalue().strip()
-            
-            exit_code, captured = await asyncio.wait_for(
-                loop.run_in_executor(None, _run_oneshot),
-                timeout=120
-            )
-            
-            if exit_code == 0 and captured:
-                reply = captured
-            elif exit_code == 0 and not captured:
-                reply = "（处理完成，但未生成回复）"
-            else:
-                reply = f"（处理出错，退出码: {exit_code}）"
-                print(f"[worker] ⚠️ oneshot 退出码: {exit_code}", flush=True)
-        except asyncio.TimeoutError:
-            reply = "（处理超时，请稍后重试）"
-            print(f"[worker] ⏰ oneshot 超时（120s）", flush=True)
-        except Exception as e:
-            reply = f"（处理出错: {e}）"
-            print(f"[worker] ❌ oneshot 调用失败: {e}", flush=True)
+            await ws.send(json.dumps({
+                "type": "thinking_end",
+                "username": BOT_DISPLAY_NAME
+            }, ensure_ascii=False))
+        except:
+            pass
     
     print(f"[worker] 💬 回复: {reply[:100]}...", flush=True)
     

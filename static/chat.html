@@ -166,6 +166,20 @@
   }
   @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
   
+  /* ── Bot 思考状态条 ── */
+  .thinking-bar{
+    display:none;padding:8px 20px;background:rgba(233,69,96,.08);
+    border-top:1px solid rgba(233,69,96,.2);font-size:13px;color:#aaa;
+    gap:8px;align-items:center;flex-shrink:0;min-height:36px
+  }
+  .thinking-bar.show{display:flex}
+  .thinking-bar .spinner{
+    width:14px;height:14px;border:2px solid #333;
+    border-top-color:#e94560;border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0
+  }
+  .thinking-bar .bot-name{color:#e94560;font-weight:600}
+  .thinking-bar .status{color:#888}
+  
   /* ── 连接状态遮罩 ── */
   .connect-overlay{
     position:fixed;inset:0;background:rgba(0,0,0,.8);
@@ -239,6 +253,10 @@
   <!-- 聊天区 -->
   <div class="chat-area">
     <div class="messages" id="messages"></div>
+    <div class="thinking-bar" id="thinkingBar">
+      <div class="spinner"></div>
+      <span><span class="bot-name" id="thinkingBot"></span> <span class="status" id="thinkingStatus"></span></span>
+    </div>
     <div class="typing-indicator" id="typingIndicator">bot 正在输入...</div>
     <div class="input-area">
       <div class="mention-dropdown" id="mentionDropdown"></div>
@@ -280,6 +298,9 @@ const connStatusEl = document.getElementById("connectionStatus");
 const sidebarToggle = document.getElementById("sidebarToggle");
 const sidebar = document.getElementById("sidebar");
 const sidebarOverlay = document.getElementById("sidebarOverlay");
+const thinkingBar = document.getElementById("thinkingBar");
+const thinkingBot = document.getElementById("thinkingBot");
+const thinkingStatus = document.getElementById("thinkingStatus");
 
 // ── 工具 ──
 function escHTML(str) {
@@ -508,6 +529,10 @@ function connect() {
         
         case "message":
           addMessage(data);
+          // bot 回复了，隐藏思考状态（兜底）
+          if (thinkingBar.classList.contains("show") && availableBots.some(b => b.name === data.username)) {
+            thinkingBar.classList.remove("show");
+          }
           break;
         
         case "system":
@@ -515,6 +540,17 @@ function connect() {
           break;
         
         case "pong":
+          break;
+        
+        case "thinking":
+          // 显示 bot 思考状态
+          thinkingBot.textContent = data.username;
+          thinkingStatus.textContent = data.status || "正在思考...";
+          thinkingBar.classList.add("show");
+          break;
+        
+        case "thinking_end":
+          thinkingBar.classList.remove("show");
           break;
       }
     } catch(e) {

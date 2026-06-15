@@ -438,6 +438,10 @@ async def handle_ws(ws: ServerConnection):
             
             elif msg_type == "ping":
                 await ws.send(json.dumps({"type": "pong"}))
+            
+            elif msg_type in ("thinking", "thinking_end"):
+                # 广播 bot 思考状态给房间所有人
+                room.broadcast(data)
     
     except websockets.exceptions.ConnectionClosed:
         pass
