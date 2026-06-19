@@ -7,12 +7,15 @@ WebSocket + HTTP + SQLite + Bot Worker 管理
 import asyncio
 import json
 import os
+import re
+import shutil
 import signal
 import socket
 import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -167,6 +170,73 @@ def db_conn():
     conn.row_factory = sqlite3.Row
     return conn
 
+# ── MEDIA 图片处理 ─────────────────────────────
+UPLOAD_DIR = STATIC_DIR / "uploads"
+
+def process_media_tags(content):
+    """扫描消息中的 MEDIA:/path 标签，将图片复制到静态目录，替换为 markdown 图片链接"""
+    if "MEDIA:" not in content:
+        return content
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _replace_media(m):
+        path = m.group(1)
+        if not os.path.isfile(path):
+            print(f"[relay] ⚠️ MEDIA 文件不存在: {path}")
+            return f"[图片丢失: {os.path.basename(path)}]"
+
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
+            ext = ".png"
+
+        saved_name = f"{uuid.uuid4().hex}{ext}"
+        saved_path = UPLOAD_DIR / saved_name
+        try:
+            shutil.copy2(path, saved_path)
+            print(f"[relay] 🖼️ MEDIA 图片已复制: {path} → uploads/{saved_name}")
+            return f"![{os.path.basename(path)}](/uploads/{saved_name})"
+        except Exception as e:
+            print(f"[relay] ❌ MEDIA 图片复制失败: {path}: {e}")
+            return f"[图片加载失败: {os.path.basename(path)}]"
+
+    # 只替换不在代码块内的 MEDIA:path（排除 ```...``` 和 `...` 内的匹配）
+    result = []
+    in_code_block = False
+    in_inline_code = False
+    i = 0
+    while i < len(content):
+        # 检测代码块开始/结束
+        if content[i:i+3] == "```":
+            in_code_block = not in_code_block
+            result.append("```")
+            i += 3
+            continue
+        # 检测行内代码
+        if content[i] == '`' and not in_code_block:
+            in_inline_code = not in_inline_code
+            result.append('`')
+            i += 1
+            continue
+        # 不在代码中才匹配 MEDIA:
+        if not in_code_block and not in_inline_code and content[i:i+6] == "MEDIA:":
+            # 找到 MEDIA: 后面的路径（直到空格或行尾）
+            j = i + 6
+            path_start = j
+            while j < len(content) and content[j] not in (' ', '\t', '\n', '\r'):
+                j += 1
+            path = content[path_start:j]
+            # 用 regex 替换
+            matched = f"MEDIA:{path}"
+            replaced = _replace_media(type('', (), {'group': lambda self, n: path})())
+            result.append(replaced)
+            i = j
+        else:
+            result.append(content[i])
+            i += 1
+
+    return "".join(result)
+
 def save_message(room_id, username, content, msg_type="message"):
     conn = db_conn()
     now = time.time()
@@ -190,10 +260,10 @@ def get_history(room_id, limit=50):
     messages = [{
         "id": r["id"],
         "username": r["username"],
-        "content": r["content"],
+        "content": process_media_tags(r["content"]),  # 处理旧消息中的 MEDIA 标签
         "msg_type": r["msg_type"],
         "time": datetime.fromtimestamp(r["created_at"]).strftime("%H:%M:%S")
-    } for r in reversed(rows)]  # 反转回正序
+    } for r in reversed(rows)]
     return messages
 
 def get_members(room_id):
@@ -265,8 +335,8 @@ def spawn_bot_worker(bot_name):
         proc = subprocess.Popen(
             [venv_python, str(WORKER_SCRIPT)],
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         PROCESSES[bot_name] = proc
         print(f"[relay] 🚀 Bot Worker '{bot_name}' 已启动 (PID {proc.pid})")
@@ -315,17 +385,26 @@ class Room:
             if not self.clients[username]:
                 del self.clients[username]
     
-    def broadcast(self, data, exclude_ws=None):
-        """广播消息给房间所有客户端"""
+    async def _safe_send(self, ws, message):
+        """安全发送单条消息，处理断开连接等异常"""
+        try:
+            await ws.send(message)
+        except websockets.exceptions.ConnectionClosed:
+            pass  # 客户端断开，正常
+        except Exception as e:
+            print(f"[relay] ⚠️ 发送失败: {e}")
+
+    async def broadcast(self, data, exclude_ws=None):
+        """广播消息给房间所有客户端，并行发送并追踪所有任务"""
         message = json.dumps(data, ensure_ascii=False)
+        tasks = []
         for username, ws_set in list(self.clients.items()):
             for ws in list(ws_set):
                 if ws is exclude_ws:
                     continue
-                try:
-                    asyncio.ensure_future(ws.send(message))
-                except:
-                    pass
+                tasks.append(asyncio.create_task(self._safe_send(ws, message)))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 rooms: dict[str, Room] = {}
 
@@ -395,11 +474,11 @@ async def process_request(connection, request):
                     )
                 )
             room = get_room("main")
-            room.broadcast({
+            await room.broadcast({
                 "type": "system",
                 "content": f"{AVAILABLE_BOTS[bot_name]['avatar']} {bot_name} 加入了群聊"
             })
-            room.broadcast({"type": "members_updated"})
+            await room.broadcast({"type": "members_updated"})
             return json_resp({"ok": True})
         return json_resp({"ok": False, "error": "未知 bot"})
 
@@ -409,11 +488,11 @@ async def process_request(connection, request):
             remove_member("main", bot_name)
             kill_bot_worker(bot_name)
             room = get_room("main")
-            room.broadcast({
+            await room.broadcast({
                 "type": "system",
                 "content": f"{bot_name} 被移出了群聊"
             })
-            room.broadcast({"type": "members_updated"})
+            await room.broadcast({"type": "members_updated"})
             return json_resp({"ok": True})
         return json_resp({"ok": False})
 
@@ -437,6 +516,11 @@ async def process_request(connection, request):
             ".css":  "text/css; charset=utf-8",
             ".js":   "application/javascript; charset=utf-8",
             ".png":  "image/png",
+            ".jpg":  "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif":  "image/gif",
+            ".webp": "image/webp",
+            ".bmp":  "image/bmp",
             ".svg":  "image/svg+xml",
             ".ico":  "image/x-icon",
         }.get(ext, "application/octet-stream")
@@ -487,11 +571,11 @@ async def handle_ws(ws: ServerConnection):
                 
                 # 非 bot 加入时广播系统消息
                 if role != "bot":
-                    room.broadcast({
+                    await room.broadcast({
                         "type": "system",
                         "content": f"👤 {username} 加入了群聊"
                     }, exclude_ws=ws)
-                    room.broadcast({"type": "members_updated"})
+                    await room.broadcast({"type": "members_updated"})
                 
                 print(f"[relay] {role} '{username}' 加入房间 {room_id}")
             
@@ -502,11 +586,14 @@ async def handle_ws(ws: ServerConnection):
                 if not content:
                     continue
                 
+                # 处理 MEDIA: 图片标签（bot 发图用）
+                content = process_media_tags(content)
+                
                 msg_id, timestamp = save_message(room_id, username, content)
                 time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
                 
                 # 广播消息给房间所有人
-                room.broadcast({
+                await room.broadcast({
                     "type": "message",
                     "id": msg_id,
                     "username": username,
@@ -516,12 +603,45 @@ async def handle_ws(ws: ServerConnection):
                 
                 print(f"[relay] [{time_str}] {username}: {content[:60]}")
             
+            elif msg_type == "image_upload":
+                if not username:
+                    continue
+                filename = data.get("filename", "image.png")
+                b64_data = data.get("data", "")
+                if not b64_data:
+                    continue
+                import base64, uuid
+                try:
+                    img_bytes = base64.b64decode(b64_data)
+                except Exception:
+                    continue
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
+                    ext = ".png"
+                upload_dir = STATIC_DIR / "uploads"
+                upload_dir.mkdir(parents=True, exist_ok=True)
+                saved_name = f"{uuid.uuid4().hex}{ext}"
+                saved_path = upload_dir / saved_name
+                saved_path.write_bytes(img_bytes)
+                img_url = f"/uploads/{saved_name}"
+                content = f"![{filename}]({img_url})"
+                msg_id, timestamp = save_message(room_id, username, content)
+                time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+                await room.broadcast({
+                    "type": "message",
+                    "id": msg_id,
+                    "username": username,
+                    "content": content,
+                    "time": time_str
+                })
+                print(f"[relay] [{time_str}] {username} 上传了图片: {saved_name}")
+
             elif msg_type == "ping":
                 await ws.send(json.dumps({"type": "pong"}))
             
             elif msg_type in ("thinking", "thinking_end"):
                 # 广播 bot 思考状态给房间所有人
-                room.broadcast(data)
+                await room.broadcast(data)
     
     except websockets.exceptions.ConnectionClosed:
         pass
@@ -530,11 +650,11 @@ async def handle_ws(ws: ServerConnection):
             room.remove_client(username, ws)
             if username not in [m["username"] for m in get_members(room_id) if m["role"] == "bot"]:
                 # 人类用户断开
-                room.broadcast({
+                await room.broadcast({
                     "type": "system",
                     "content": f"👤 {username} 离开了群聊"
                 })
-                room.broadcast({"type": "members_updated"})
+                await room.broadcast({"type": "members_updated"})
             print(f"[relay] '{username}' 断开连接")
 
 # ── 工具 ───────────────────────────────────────────
@@ -549,11 +669,112 @@ def get_local_ip():
     except Exception:
         return "127.0.0.1"
 
+# ── 外部消息注入 API（port 9093）─────────────────
+EXTERNAL_API_PORT = 9093
+
+async def handle_external_http(reader, writer):
+    """处理外部 HTTP 请求（简单 POST API）"""
+    try:
+        raw = await asyncio.wait_for(reader.read(65536), timeout=10)
+        if not raw:
+            writer.close()
+            return
+        
+        # 解析 HTTP 请求行
+        text = raw.decode("utf-8", errors="replace")
+        lines = text.split("\r\n")
+        if not lines:
+            writer.close()
+            return
+        
+        request_line = lines[0]
+        parts = request_line.split(" ")
+        method = parts[0] if len(parts) > 0 else ""
+        path = parts[1] if len(parts) > 1 else ""
+        
+        # 只处理 POST /api/external/message
+        if method == "POST" and path == "/api/external/message":
+            # 找空行（header/body 分隔）
+            body_start = text.find("\r\n\r\n")
+            if body_start == -1:
+                body = ""
+            else:
+                body = text[body_start + 4:]
+            
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                await _send_http_response(writer, 400, {"error": "invalid JSON"})
+                return
+            
+            username = data.get("username", "").strip()
+            content = data.get("content", "").strip()
+            msg_time = data.get("time", "")
+            
+            if not username or not content:
+                await _send_http_response(writer, 400, {"error": "username and content required"})
+                return
+            
+            # 处理 MEDIA: 标签 → 复制图片到 static/uploads/
+            content = process_media_tags(content)
+            
+            # 保存到数据库
+            msg_id, timestamp = save_message("main", username, content)
+            
+            # 格式化时间
+            time_str = msg_time or datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+            
+            # 广播给所有 WebSocket 客户端
+            room = get_room("main")
+            await room.broadcast({
+                "type": "message",
+                "id": msg_id,
+                "username": username,
+                "content": content,
+                "time": time_str
+            })
+            
+            print(f"[relay/external] [{time_str}] {username}: {content[:60]}")
+            await _send_http_response(writer, 200, {"ok": True, "id": msg_id})
+        else:
+            await _send_http_response(writer, 404, {"error": "not found"})
+    
+    except asyncio.TimeoutError:
+        writer.close()
+    except Exception as e:
+        print(f"[relay/external] ❌ 错误: {e}")
+        try:
+            await _send_http_response(writer, 500, {"error": str(e)})
+        except:
+            writer.close()
+
+async def _send_http_response(writer, status, data):
+    """发送 HTTP JSON 响应"""
+    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    status_text = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}.get(status, "Unknown")
+    response = (
+        f"HTTP/1.1 {status} {status_text}\r\n"
+        f"Content-Type: application/json; charset=utf-8\r\n"
+        f"Access-Control-Allow-Origin: *\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    ).encode("utf-8") + body
+    writer.write(response)
+    await writer.drain()
+    writer.close()
+
 # ── 主入口 ────────────────────────────────────────
 async def main():
     init_db()
     
-    async with serve(handle_ws, HOST, PORT, process_request=process_request) as server:
+    # 启动外部消息 API 服务器
+    ext_server = await asyncio.start_server(
+        handle_external_http, "0.0.0.0", EXTERNAL_API_PORT
+    )
+    print(f"[relay] 📡 外部消息 API: http://0.0.0.0:{EXTERNAL_API_PORT}/api/external/message")
+    
+    async with serve(handle_ws, HOST, PORT, process_request=process_request) as ws_server:
         local_ip = get_local_ip()
         print(f"[relay] 🚀 中继服务器已启动")
         print(f"[relay] 📍 聊天页面: http://{local_ip}:{PORT}/")
@@ -566,29 +787,38 @@ async def main():
             add_member("main", display_name, "bot")
             spawn_bot_worker(bot_key)
             print(f"[relay] 🔄 自动恢复 bot: {display_name}")
+        
         print()
         
         # 处理 SIGTERM/SIGINT
-        stop = asyncio.get_running_loop().run_in_executor
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 asyncio.get_running_loop().add_signal_handler(
-                    sig, lambda: asyncio.ensure_future(shutdown(server))
+                    sig, lambda: asyncio.ensure_future(shutdown(ws_server, ext_server))
                 )
             except NotImplementedError:
                 pass
         
-        await server.serve_forever()
-
-async def shutdown(server):
+        # 同时等待两个服务器
+        await asyncio.gather(
+            ws_server.serve_forever(),
+            ext_server.serve_forever()
+        )
+async def shutdown(ws_server, ext_server=None):
     print("\n[relay] 🛑 正在关闭中继服务器...")
     kill_all_workers()
-    server.close()
+    ws_server.close()
+    if ext_server:
+        ext_server.close()
     print("[relay] ✅ 已关闭")
 
 if __name__ == "__main__":
+    import asyncio
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         kill_all_workers()
         print("\n[relay] 👋 再见")
+    except asyncio.CancelledError:
+        print("\n[relay] ⚠️ 主任务被取消")
+        kill_all_workers()

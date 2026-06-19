@@ -144,6 +144,18 @@
   }
   .input-area .send-btn:hover{background:#d63851}
   .input-area .send-btn:disabled{background:#555;cursor:not-allowed}
+  .input-area .send-btn.targeting{
+    background:#f97316;box-shadow:0 0 10px rgba(249,115,22,.3)
+  }
+  .input-area .send-btn.targeting:hover{background:#ea580c}
+  .img-btn{
+    background:transparent;border:1px solid #0f3460;border-radius:10px;
+    color:#888;font-size:18px;cursor:pointer;padding:8px 12px;
+    height:44px;transition:all .2s;flex-shrink:0;line-height:1
+  }
+  .img-btn:hover{background:rgba(233,69,96,.1);border-color:#e94560;color:#e94560}
+  .img-uploading{opacity:.5;pointer-events:none;position:relative}
+  .img-uploading::after{content:"上传中...";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;color:#888}
   
   /* ── @提及下拉框 ── */
   .input-area{position:relative}
@@ -168,6 +180,8 @@
     font-size:12px;color:#888;padding:4px 20px;display:none;
     animation:pulse 1.5s ease infinite
   }
+  
+  /* ── Bot 目标选择条 ── */
   @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
   
   /* ── Bot 思考状态条 ── */
@@ -197,7 +211,78 @@
   }
   @keyframes spin{to{transform:rotate(360deg)}}
   .connect-overlay p{color:#888;font-size:14px}
-  
+
+  /* ── Bot 选择器模态框 ── */
+  .bot-selector-overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.6);
+    display:none;align-items:center;justify-content:center;
+    z-index:200;backdrop-filter:blur(4px)
+  }
+  .bot-selector-overlay.show{display:flex}
+  .bot-selector{
+    background:#16213e;border:1px solid #0f3460;border-radius:16px;
+    padding:24px;width:360px;max-width:90vw;
+    box-shadow:0 20px 60px rgba(0,0,0,.5);animation:modalIn .2s ease
+  }
+  @keyframes modalIn{from{opacity:0;transform:scale(.95) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+  .bot-selector h3{font-size:15px;color:#888;margin-bottom:16px;font-weight:500;text-align:center}
+  .bot-selector .list{display:flex;flex-direction:column;gap:6px}
+  .bot-selector .option{
+    display:flex;align-items:center;gap:12px;
+    padding:12px 16px;border-radius:12px;cursor:pointer;
+    border:1px solid #0f3460;background:rgba(255,255,255,.03);
+    transition:all .2s;font-size:14px
+  }
+  .bot-selector .option:hover,
+  .bot-selector .option.selected{
+    border-color:#e94560;background:rgba(233,69,96,.1);
+    transform:translateX(4px)
+  }
+  .bot-selector .option.selected{box-shadow:0 0 12px rgba(233,69,96,.3)}
+  .bot-selector .option .avatar{font-size:24px;width:36px;text-align:center}
+  .bot-selector .option .name{flex:1;font-weight:500;color:#e0e0e0}
+  .bot-selector .option .hint{font-size:11px;color:#555}
+  .bot-selector .option.all-option{
+    border-color:#4ade8033;color:#4ade80
+  }
+  .bot-selector .option.all-option:hover{
+    border-color:#4ade80;background:rgba(74,222,128,.08)
+  }
+  .bot-selector .cancel{
+    display:block;margin-top:12px;padding:10px;width:100%;
+    background:transparent;border:1px solid #333;border-radius:10px;
+    color:#666;font-size:13px;cursor:pointer;transition:all .2s;text-align:center
+  }
+  .bot-selector .cancel:hover{border-color:#888;color:#aaa}
+
+  /* ── 文章预览卡片 ── */
+  .article-preview{
+    margin-top:12px;border:1px solid #0f3460;border-radius:12px;
+    overflow:hidden;background:#1a1a2e
+  }
+  .article-preview .header{
+    display:flex;align-items:center;padding:10px 14px;
+    background:#16213e;border-bottom:1px solid #0f3460;font-size:13px
+  }
+  .article-preview .header .icon{font-size:18px;margin-right:8px}
+  .article-preview .header .title{flex:1;color:#e0e0e0;font-weight:600}
+  .article-preview .header .expand-btn{
+    background:#e94560;color:#fff;border:none;border-radius:6px;
+    padding:4px 12px;font-size:12px;cursor:pointer;transition:background .2s
+  }
+  .article-preview .header .expand-btn:hover{background:#d63850}
+  .article-preview iframe{
+    width:100%;border:none;display:block;
+    height:360px;transition:height .3s ease
+  }
+  .article-preview iframe.expanded{height:80vh}
+  .article-preview .footer-bar{
+    padding:8px 14px;background:#16213e;border-top:1px solid #0f3460;
+    font-size:11px;color:#666;text-align:center
+  }
+  .article-preview .footer-bar a{color:#e94560;text-decoration:none}
+  .article-preview .footer-bar a:hover{text-decoration:underline}
+
   /* ── 响应式 ── */
   @media(max-width:768px){
     .sidebar{position:fixed;left:-280px;top:0;bottom:0;z-index:50;transition:left .3s;width:280px}
@@ -219,6 +304,17 @@
 
 <!-- 侧边栏遮罩（移动端） -->
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+<!-- Bot 选择器模态框 -->
+<div class="bot-selector-overlay" id="botSelector">
+  <div class="bot-selector">
+    <h3>🤖 发送给哪个 Bot？</h3>
+    <div class="list" id="botSelectorList">
+      <!-- 由 JS 动态渲染 -->
+    </div>
+    <button class="cancel" id="botSelectorCancel">取消发送</button>
+  </div>
+</div>
 
 <!-- 顶部栏 -->
 <header class="topbar">
@@ -245,6 +341,7 @@
       <h3>💡 使用提示</h3>
       <ul style="font-size:12px;color:#888;list-style:none;line-height:1.8">
         <li>• <code>@机器人名</code> 召唤对应的 bot 处理任务</li>
+        <li>• 🎯 点击下方 bot 头像选中「目标」，消息自动 <code>@</code> 不用手动打</li>
         <li>• 没被@时 bot 静默（不消耗 token）</li>
         <li>• 🟢 绿点 = gateway 在线，⚪ 灰点 = gateway 已停</li>
       </ul>
@@ -261,6 +358,8 @@
     <div class="typing-indicator" id="typingIndicator">bot 正在输入...</div>
     <div class="input-area">
       <div class="mention-dropdown" id="mentionDropdown"></div>
+      <input type="file" id="imageInput" accept="image/*" style="display:none">
+      <button class="img-btn" id="imgBtn" title="发送图片">🖼</button>
       <textarea id="input" placeholder='输入消息... 用 @机器人名 召唤 bot（如 @writer）' rows="1"></textarea>
       <button class="send-btn" id="sendBtn" disabled>发送</button>
     </div>
@@ -279,6 +378,7 @@ let connected = false;
 let availableBots = [];
 let memberNames = new Set();
 let reconnecting = false;
+let thinkingTimer = null;  // 思考状态超时定时器
 let retryCount = 0;
 const MAX_RETRIES = 5;
 
@@ -312,7 +412,9 @@ function escHTML(str) {
 function simpleMarkdown(text) {
   // 简单的 Markdown 渲染
   let html = escHTML(text);
-  // @提及高亮（避免与自己的红色气泡冲突）
+  // 图片 ![](url) — 先渲染，避免 & 被转义
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;max-height:400px;border-radius:8px;margin:4px 0;display:block" loading="lazy">');
+  // @提及高亮
   html = html.replace(/@(\S+)/g, '<span style="color:#fbbf24;font-weight:600">@$1</span>');
   // 代码块
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
@@ -320,6 +422,8 @@ function simpleMarkdown(text) {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   // 粗体
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // 纯图片 URL（一行只有一张图片链接）
+  html = html.replace(/^https?:\/\/[^\s]+\.(png|jpg|jpeg|gif|webp)(\?[^\s]*)?$/gim, '<img src="$&" style="max-width:100%;max-height:400px;border-radius:8px;margin:4px 0;display:block" loading="lazy">');
   // 换行
   html = html.replace(/\n/g, '<br>');
   return html;
@@ -346,10 +450,41 @@ function addMessage(data) {
         <span class="time">${data.time || ""}</span>
       </div>
     `;
+
+    // 文章预览卡片检测
+    const previewMatch = data.content.match(/📖\s*文章预览:\s*(\S+)/);
+    if (previewMatch) {
+      const slug = previewMatch[1];
+      const bubble = div.querySelector(".bubble");
+      if (bubble) {
+        const card = document.createElement("div");
+        card.className = "article-preview";
+        card.innerHTML = `
+          <div class="header">
+            <span class="icon">📖</span>
+            <span class="title">文章预览</span>
+            <button class="expand-btn" onclick="togglePreview(this)">展开阅读全文</button>
+          </div>
+          <iframe src="/articles/${encodeURIComponent(slug)}.html" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>
+          <div class="footer-bar">
+            <a href="/articles/${encodeURIComponent(slug)}.html" target="_blank">在新标签页打开 ↗</a>
+          </div>
+        `;
+        bubble.appendChild(card);
+      }
+    }
   }
   
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// 展开/收起文章预览
+function togglePreview(btn) {
+  const card = btn.closest(".article-preview");
+  const iframe = card.querySelector("iframe");
+  const isExpanded = iframe.classList.toggle("expanded");
+  btn.textContent = isExpanded ? "收起" : "展开阅读全文";
 }
 
 function getBotAvatar(name) {
@@ -478,6 +613,7 @@ function getMentionContext() {
   return null;
 }
 
+
 // ── WebSocket ──
 function getWsUrl() {
   const loc = window.location;
@@ -540,6 +676,7 @@ function connect() {
           // bot 回复了，隐藏思考状态（兜底）
           if (thinkingBar.classList.contains("show") && availableBots.some(b => b.name === data.username)) {
             thinkingBar.classList.remove("show");
+            if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null; }
           }
           // bot 回复了，刷新 gateway 状态（可能刚被唤醒）
           if (availableBots.some(b => b.name === data.username)) {
@@ -565,10 +702,17 @@ function connect() {
           thinkingBot.textContent = data.username;
           thinkingStatus.textContent = data.status || "正在思考...";
           thinkingBar.classList.add("show");
+          // 60秒超时自动隐藏（防止丢失 thinking_end 导致永久显示）
+          if (thinkingTimer) clearTimeout(thinkingTimer);
+          thinkingTimer = setTimeout(() => {
+            thinkingBar.classList.remove("show");
+            thinkingTimer = null;
+          }, 60000);
           break;
         
         case "thinking_end":
           thinkingBar.classList.remove("show");
+          if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null; }
           break;
       }
     } catch(e) {
@@ -580,6 +724,9 @@ function connect() {
     connected = false;
     connStatusEl.innerHTML = '<span class="dot" style="background:#666"></span>断开连接';
     sendBtn.disabled = true;
+    // 断开时隐藏思考状态
+    thinkingBar.classList.remove("show");
+    if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null; }
     
     if (!reconnecting) {
       reconnecting = true;
@@ -612,18 +759,23 @@ function connect() {
 }
 
 function sendMessage() {
-  const text = inputEl.value.trim();
+  let text = inputEl.value.trim();
   if (!text || !connected) return;
-  
+
+  // 始终弹出 Bot 选择器，让用户选发给谁
+  showBotSelector(text);
+}
+
+function doSend(text) {
   ws.send(JSON.stringify({
     type: "message",
     room: ROOM,
     content: text
   }));
-  
+
   inputEl.value = "";
   inputEl.style.height = "auto";
-  
+
   // 发送 @ 消息后刷新 gateway 状态（可能触发唤醒）
   if (text.includes("@")) {
     setTimeout(() => {
@@ -633,6 +785,170 @@ function sendMessage() {
     }, 2000);
   }
 }
+
+// ── Bot 选择器 ──
+const botSelector = document.getElementById("botSelector");
+const botSelectorList = document.getElementById("botSelectorList");
+const botSelectorCancel = document.getElementById("botSelectorCancel");
+
+let pendingText = "";
+
+function showBotSelector(text) {
+  pendingText = text;
+  // 显示所有 bot（不管在线离线），用状态指示器区分
+  botSelectorList.innerHTML = [
+    // "全部群聊"选项
+    `<div class="option all-option" data-bot="">
+      <span class="avatar">💬</span>
+      <span class="name">全部群聊</span>
+      <span class="hint">→ @所有agent</span>
+    </div>`,
+    // 所有 bot
+    ...availableBots.map(bot => {
+      const statusDot = bot.gateway === "active" ? "🟢" : "⚪";
+      const statusHint = bot.gateway === "active" ? "在线" : "离线";
+      return `<div class="option" data-bot="${bot.name}">
+        <span class="avatar">${bot.avatar} ${statusDot}</span>
+        <span class="name">@${bot.name}</span>
+        <span class="hint">${statusHint} → 发送</span>
+      </div>`;
+    })
+  ].join("");
+
+  const options = botSelectorList.querySelectorAll(".option");
+  let selectedIndex = 0;
+
+  // 高亮当前选项
+  function highlightOption(idx) {
+    options.forEach(o => o.classList.remove("selected"));
+    if (idx >= 0 && idx < options.length) {
+      options[idx].classList.add("selected");
+      options[idx].scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // 发送当前选中项
+  function confirmSelection(idx) {
+    const el = options[idx];
+    if (!el) return;
+    const botName = el.dataset.bot;
+    let finalText;
+    if (botName) {
+      finalText = "@" + botName + " " + pendingText;
+    } else {
+      // 全部群聊 → @所有 agent
+      const allMentions = availableBots.map(b => "@" + b.name).join(" ");
+      finalText = allMentions + " " + pendingText;
+    }
+    hideBotSelector();
+    doSend(finalText);
+  }
+
+  // 点击选项 → 发送消息
+  options.forEach((el, i) => {
+    el.addEventListener("click", () => confirmSelection(i));
+  });
+
+  // 键盘导航（capture phase 确保在输入框 handler 之前拦截）
+  function onKeydown(e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      e.stopPropagation();
+      selectedIndex = (selectedIndex + 1) % options.length;
+      highlightOption(selectedIndex);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      selectedIndex = (selectedIndex - 1 + options.length) % options.length;
+      highlightOption(selectedIndex);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      e.stopPropagation();
+      selectedIndex = (selectedIndex + 1) % options.length;
+      highlightOption(selectedIndex);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      e.stopPropagation();
+      selectedIndex = (selectedIndex - 1 + options.length) % options.length;
+      highlightOption(selectedIndex);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      confirmSelection(selectedIndex);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      hideBotSelector();
+    }
+  }
+  document.addEventListener("keydown", onKeydown, true);  // capture phase
+
+  // 打开时默认高亮第一个
+  highlightOption(0);
+  botSelector.classList.add("show");
+
+  // 存下 onKeydown 供 hideBotSelector 清理
+  botSelector._keydownHandler = onKeydown;
+}
+
+function hideBotSelector() {
+  botSelector.classList.remove("show");
+  pendingText = "";
+  // 清理键盘监听，避免泄漏
+  if (botSelector._keydownHandler) {
+    document.removeEventListener("keydown", botSelector._keydownHandler, true);
+    botSelector._keydownHandler = null;
+  }
+}
+
+botSelectorCancel.addEventListener("click", hideBotSelector);
+
+// 点击遮罩关闭
+botSelector.addEventListener("click", (e) => {
+  if (e.target === botSelector) hideBotSelector();
+});
+
+// ── 图片上传 ──
+const imageInput = document.getElementById("imageInput");
+const imgBtn = document.getElementById("imgBtn");
+
+imgBtn.addEventListener("click", () => imageInput.click());
+
+imageInput.addEventListener("change", () => {
+  const file = imageInput.files[0];
+  if (!file) return;
+  
+  // 限制 5MB
+  if (file.size > 5 * 1024 * 1024) {
+    alert("图片太大，请选 5MB 以内的");
+    imageInput.value = "";
+    return;
+  }
+  
+  // 显示上传状态
+  imgBtn.classList.add("img-uploading");
+  imgBtn.disabled = true;
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const base64 = e.target.result.split(",")[1]; // 去掉 data:image/xxx;base64,
+    ws.send(JSON.stringify({
+      type: "image_upload",
+      room: ROOM,
+      filename: file.name,
+      data: base64
+    }));
+    imageInput.value = "";
+    imgBtn.classList.remove("img-uploading");
+    imgBtn.disabled = false;
+  };
+  reader.onerror = () => {
+    imgBtn.classList.remove("img-uploading");
+    imgBtn.disabled = false;
+    alert("图片读取失败");
+  };
+  reader.readAsDataURL(file);
+});
 
 // ── 事件绑定 ──
 sendBtn.addEventListener("click", sendMessage);

@@ -5,11 +5,11 @@
 """
 
 import asyncio
-import io
 import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 # ── Bot 配置（从环境变量读取） ────────────────────
@@ -35,45 +35,113 @@ print(f"[worker] 🤖 Bot '{BOT_NAME}' (profile={BOT_PROFILE}) 启动中...", fl
 print(f"[worker] 📍 中继: {RELAY_WS_URL}", flush=True)
 print(f"[worker] 📁 HERMES_HOME: {HERMES_HOME}", flush=True)
 
-# ── 动态导入 Hermes oneshot ──────────────────────
-def setup_hermes():
-    """设置 Hermes 环境并导入 oneshot API"""
-    if not HERMES_HOME:
-        print(f"[worker] ⚠️  未配置 HERMES_HOME，将使用默认路径", flush=True)
-        return None
-    
-    os.environ["HERMES_HOME"] = HERMES_HOME
-    os.environ["HERMES_YOLO"] = "true"  # 自动审批模式
-    
-    # 找到 hermes_cli
-    hermes_home = HERMES_HOME
-    # 尝试各种路径
-    hermes_venv_site = os.environ.get("HERMES_SITE_PACKAGES", "")
-    possible_paths = []
-    if hermes_venv_site:
-        possible_paths.append(hermes_venv_site)
-    possible_paths.extend([
-        "/root/hermes-agent/hermes-agent-2026.5.16/venv/lib/python3.11/site-packages",
-        "/root/hermes-agent/hermes-agent-2026.5.16/venv/lib/python3.13/site-packages",
-        os.path.expanduser("~/.hermes/hermes-agent/venv/lib/python3.11/site-packages"),
-    ])
-    
-    for p in possible_paths:
-        if os.path.exists(os.path.join(p, "hermes_cli")):
-            if p not in sys.path:
-                sys.path.insert(0, p)
-            break
-    
-    try:
-        from hermes_cli.oneshot import run_oneshot
-        print(f"[worker] ✅ Hermes oneshot API 加载成功", flush=True)
-        return run_oneshot
-    except ImportError as e:
-        print(f"[worker] ⚠️  Hermes oneshot 导入失败: {e}", flush=True)
-        print(f"[worker] ⚠️  将使用模拟模式（仅打印不回复）", flush=True)
-        return None
+# ── 检查 Hermes CLI ────────────────────────────
+HERMES_CLI = "/root/.local/bin/hermes"
 
-run_oneshot = setup_hermes()
+def check_hermes_cli():
+    """检查 hermes CLI 是否可执行"""
+    if os.path.isfile(HERMES_CLI) and os.access(HERMES_CLI, os.X_OK):
+        print(f"[worker] ✅ Hermes CLI 可用: {HERMES_CLI}", flush=True)
+        return True
+    print(f"[worker] ⚠️  Hermes CLI 不可用: {HERMES_CLI}", flush=True)
+    return False
+
+hermes_ok = check_hermes_cli()
+
+# ── 方案B：进程内 Hermes 调用（代替子进程） ──────────
+_hermes_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hermes")
+_hermes_agent = None  # 持久化 agent，避免每次冷启动
+
+def _init_hermes_agent(hermes_home: str):
+    """创建并缓存 AIAgent，大幅节省后续调用时间（6s 冷启动 → 1s 复用）"""
+    global _hermes_agent
+    if _hermes_agent is not None:
+        return _hermes_agent
+
+    from hermes_cli.config import load_config
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    from hermes_cli.tools_config import _get_platform_tools
+    from run_agent import AIAgent
+
+    cfg = load_config()
+    model_cfg = cfg.get("model") or {}
+    cfg_model = (model_cfg if isinstance(model_cfg, str)
+                 else (model_cfg.get("default") or model_cfg.get("model") or ""))
+    toolsets_list = sorted(_get_platform_tools(cfg, "cli"))
+
+    runtime = resolve_runtime_provider(target_model=cfg_model or None)
+
+    def _clarify_callback(question, choices=None):
+        """Oneshot 模式：无用户可问，让 agent 自己做合理选择"""
+        if choices:
+            return (f"[oneshot mode: no user available. Pick the best option from "
+                    f"{choices} using your own judgment and continue.]")
+        return ("[oneshot mode: no user available. Make the most reasonable "
+                "assumption you can and continue.]")
+
+    agent = AIAgent(
+        api_key=runtime.get("api_key"),
+        base_url=runtime.get("base_url"),
+        provider=runtime.get("provider"),
+        api_mode=runtime.get("api_mode"),
+        model=cfg_model,
+        enabled_toolsets=toolsets_list,
+        quiet_mode=True,
+        platform="cli",
+        session_db=None,
+        credential_pool=runtime.get("credential_pool"),
+        clarify_callback=_clarify_callback,
+    )
+    agent.suppress_status_output = True
+    agent.stream_delta_callback = None
+    agent.tool_gen_callback = None
+
+    # 预热：跑一次简单的 chat 并清空 session_messages
+    try:
+        agent.chat("预热")
+    except Exception:
+        pass
+    agent._session_messages = []
+
+    _hermes_agent = agent
+    print(f"[worker] ✅ Hermes AIAgent 已初始化（缓存）", flush=True)
+    return agent
+
+def _run_hermes_oneshot(prompt: str, hermes_home: str) -> str:
+    """在子线程中调用 Hermes 持久化 agent，无 300s 超时限制。
+
+    首次调用会冷启动（~6s），后续每次约 1~2s。
+    返回 AI 回复文本，失败时抛出异常。
+    """
+    # 暂存原环境变量
+    old_home = os.environ.get("HERMES_HOME", "")
+    old_yolo = os.environ.get("HERMES_YOLO_MODE", "")
+    old_hooks = os.environ.get("HERMES_ACCEPT_HOOKS", "")
+
+    try:
+        os.environ["HERMES_HOME"] = hermes_home
+        os.environ["HERMES_YOLO_MODE"] = "1"
+        os.environ["HERMES_ACCEPT_HOOKS"] = "1"
+
+        agent = _init_hermes_agent(hermes_home)
+        result = agent.chat(prompt) or ""
+        # 清空 session 消息，确保每次调用独立
+        agent._session_messages = []
+        return result
+    finally:
+        # 恢复原环境变量
+        if old_home:
+            os.environ["HERMES_HOME"] = old_home
+        else:
+            os.environ.pop("HERMES_HOME", None)
+        if old_yolo:
+            os.environ["HERMES_YOLO_MODE"] = old_yolo
+        else:
+            os.environ.pop("HERMES_YOLO_MODE", None)
+        if old_hooks:
+            os.environ["HERMES_ACCEPT_HOOKS"] = old_hooks
+        else:
+            os.environ.pop("HERMES_ACCEPT_HOOKS", None)
 
 # ── 上下文管理 ──────────────────────────────────
 class ContextManager:
@@ -212,58 +280,38 @@ async def handle_mention(ws, trigger_msg):
             except:
                 pass
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=10)
+                await asyncio.wait_for(stop_event.wait(), timeout=3)
             except asyncio.TimeoutError:
                 continue
     
     stop_heartbeat = asyncio.Event()
     hb_task = asyncio.create_task(thinking_heartbeat(stop_heartbeat))
     
-    print(f"[worker] 🧠 正在调用 Hermes oneshot...", flush=True)
-    
+    print(f"[worker] 🧠 正在调用 Hermes oneshot（进程内）...", flush=True)
+
+    reply = ""  # 默认值，防止 Pyright 报未绑定
+
     try:
-        if run_oneshot is None:
-            # 模拟模式
-            reply = f"（{BOT_DISPLAY_NAME} 已收到消息，但没有 Hermes oneshot API，无法生成回复）"
-            print(f"[worker] ⚠️  模拟模式，不实际调用", flush=True)
+        if not hermes_ok:
+            reply = f"（{BOT_DISPLAY_NAME} 已收到消息，但 Hermes CLI 不可用）"
+            print(f"[worker] ⚠️  Hermes CLI 不可用，跳过调用", flush=True)
         else:
             try:
-                # 设置 HERMES_HOME 环境
-                os.environ["HERMES_HOME"] = HERMES_HOME
-                os.environ["HERMES_YOLO"] = "true"
-                
-                # 在线程池中运行 oneshot，避免阻塞事件循环
-                loop = asyncio.get_running_loop()
-                
-                def _run_oneshot():
-                    """同步执行 oneshot 并捕获输出"""
-                    stdout_capture = io.StringIO()
-                    old_stdout = sys.stdout
-                    sys.stdout = stdout_capture
-                    try:
-                        ec = run_oneshot(prompt=prompt)
-                    finally:
-                        sys.stdout = old_stdout
-                    return ec, stdout_capture.getvalue().strip()
-                
-                exit_code, captured = await asyncio.wait_for(
-                    loop.run_in_executor(None, _run_oneshot),
-                    timeout=120
+                # ── 方案B：进程内 _run_agent，无 300s 超时 ──
+                loop = asyncio.get_event_loop()
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        _hermes_executor, _run_hermes_oneshot, prompt, HERMES_HOME
+                    ),
+                    timeout=120  # 最多等 2 分钟
                 )
-                
-                if exit_code == 0 and captured:
-                    reply = captured
-                elif exit_code == 0 and not captured:
-                    reply = "（处理完成，但未生成回复）"
-                else:
-                    reply = f"（处理出错，退出码: {exit_code}）"
-                    print(f"[worker] ⚠️ oneshot 退出码: {exit_code}", flush=True)
+                reply = response.strip() if response and response.strip() else "（处理完成，但未生成回复）"
             except asyncio.TimeoutError:
-                reply = "（处理超时，请稍后重试）"
-                print(f"[worker] ⏰ oneshot 超时（120s）", flush=True)
+                reply = f"（{BOT_DISPLAY_NAME} 处理超时，请重试）"
+                print(f"[worker] ⏰ Hermes 调用超时 (120s)", flush=True)
             except Exception as e:
                 reply = f"（处理出错: {e}）"
-                print(f"[worker] ❌ oneshot 调用失败: {e}", flush=True)
+                print(f"[worker] ❌ in-process oneshot 失败: {e}", flush=True)
     finally:
         # 停止心跳
         stop_heartbeat.set()
